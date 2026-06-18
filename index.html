@@ -1008,8 +1008,8 @@
 // ════════════════════════════════════════════════════════════════════════════
 //  CONFIG
 // ════════════════════════════════════════════════════════════════════════════
-const PROJECT = 'fzndpqbjmhwwouxktmol';
-const SQL_TOOL = 'mcp__062183b1-0e31-434a-b129-4ba2a01aa3a2__execute_sql';
+const SUPABASE_URL = 'https://fzndpqbjmhwwouxktmol.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ6bmRwcWJqbWh3d291eGt0bW9sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA5MzU1NTEsImV4cCI6MjA5NjUxMTU1MX0.sk31039_TfxQkAKs7fe3ec7qJbyCybtPSojxqGrBvnc';
 
 // Zone display order & SVG positions (viewBox 0 0 440 420)
 const ZONES = ['P','1B','2B','3B','SS','LF','CF','RF'];
@@ -1059,14 +1059,9 @@ async function openSeasonModal() {
   const listEl = document.getElementById('seasonOptionsList');
   listEl.innerHTML = '<div style="padding:16px 20px;color:#8b949e;font-size:0.85rem">Loading…</div>';
 
-  const cowork = getCowork();
   let seasons = [];
   try {
-    const r = await cowork.callMcpTool('mcp__062183b1-0e31-434a-b129-4ba2a01aa3a2__execute_sql', {
-      project_id: 'fzndpqbjmhwwouxktmol',
-      query: `SELECT DISTINCT season FROM games WHERE season IS NOT NULL ORDER BY season DESC`
-    });
-    const rows = parseMcp(r);
+    const rows = await sql(`SELECT DISTINCT season FROM games WHERE season IS NOT NULL ORDER BY season DESC`);
     seasons = (rows || []).map(row => row.season).filter(Boolean);
   } catch(e) {}
 
@@ -1158,16 +1153,10 @@ async function init() {
   sel.innerHTML = '<option value="">— Loading… —</option>';
   if (list) list.innerHTML = '<div style="color:#8b949e;font-size:0.85rem">Loading teams…</div>';
   try {
-    const raw = await getCowork().callMcpTool(SQL_TOOL, {
-      project_id: PROJECT,
-      query: `SELECT id, name, sport FROM teams WHERE LOWER(sport) = LOWER('${currentSport}') ORDER BY name`
-    });
-    const teams = parseMcp(raw);
+    const teams = await sql(`SELECT id, name, sport FROM teams WHERE LOWER(sport) = LOWER('${currentSport}') ORDER BY name`);
     if (!teams.length) {
-      // Show debug info in modal so we can see what came back
-      const dbg = JSON.stringify(raw).slice(0, 300);
       sel.innerHTML = '<option value="">⚠️ No teams found</option>';
-      if (list) list.innerHTML = `<div style="color:#f87171;font-size:0.75rem;word-break:break-all">⚠️ 0 rows returned.<br>${dbg}</div>`;
+      if (list) list.innerHTML = `<div style="color:#f87171;font-size:0.75rem">⚠️ 0 rows returned.</div>`;
       return;
     }
     populateDropdown(sel, teams);
@@ -1209,8 +1198,17 @@ function escAttr(s) {
 }
 
 async function sql(query) {
-  const r = await getCowork().callMcpTool(SQL_TOOL, { project_id: PROJECT, query });
-  return parseMcp(r);
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/exec_sql`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`
+    },
+    body: JSON.stringify({ query_text: query })
+  });
+  if (!r.ok) throw new Error(`Supabase error ${r.status}: ${await r.text()}`);
+  return await r.json();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2930,26 +2928,8 @@ function addGuestToLineupModal(name) {
   renumberLineupItems();
 }
 
-/// ── Bootstrap: wait for window.cowork (or window.parent.cowork), then load teams ──
-function getCowork() {
-  return window.cowork?.callMcpTool ? window.cowork
-       : window.parent?.cowork?.callMcpTool ? window.parent.cowork
-       : null;
-}
 (async () => {
-  // Poll until the Cowork runtime injects cowork (up to 10s, check both frames)
-  let tries = 0;
-  while (!getCowork() && tries < 100) {
-    await new Promise(r => setTimeout(r, 100));
-    tries++;
-  }
-  if (!getCowork()) {
-    const list = document.getElementById('teamModalList');
-    const dbg = `window.cowork=${typeof window.cowork}, parent.cowork=${typeof window.parent?.cowork}`;
-    if (list) list.innerHTML = `<div style="color:#f87171;font-size:0.75rem;word-break:break-all">⚠️ Runtime unavailable after 10s<br>${dbg}</div>`;
-    return;
-  }
-  await init();  // populateDropdown sets allTeamsForModal
+  await init();
 })();
 
 // ════════════════════════════════════════════════════════════════════════════
