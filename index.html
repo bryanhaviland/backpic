@@ -560,6 +560,17 @@
   table.dt td:first-child { color: #8b949e; }
   table.dt td:nth-child(2) { font-weight: 600; color: #e6edf3; }
   table.dt tr:hover td { background: rgba(255,255,255,0.025); }
+  /* sticky player name column */
+  table.dt th:nth-child(2),
+  table.dt td:nth-child(2) {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #0d1117;
+    box-shadow: 2px 0 6px rgba(0,0,0,0.4);
+  }
+  table.dt th:nth-child(2) { background: #161b22; z-index: 3; }
+  table.dt tr:hover td:nth-child(2) { background: #111820; }
   .good { color: #3fb950; font-weight: 700; }
   .bad  { color: #f85149; font-weight: 700; }
   .gold { color: #e8b55a; font-weight: 700; }
