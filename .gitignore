@@ -11,4 +11,7 @@ __pycache__/
 
 # Misc
 .DS_Store
-ziy66GBr
+
+# Cowork artifact files
+versions/
+thumbnail.png
