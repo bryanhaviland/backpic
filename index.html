@@ -761,6 +761,37 @@
   }
   .exit-game-view-btn:hover { color: #e6edf3; border-color: #8b949e; }
 
+  /* ── BATTER NOTE ICON ── */
+  .batter-note-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(232,181,90,0.18); border: 1px solid rgba(232,181,90,0.5);
+    border-radius: 50%; width: 22px; height: 22px; font-size: 0.7rem;
+    cursor: pointer; margin-left: 8px; flex-shrink: 0;
+    transition: background 0.15s;
+  }
+  .batter-note-icon:hover { background: rgba(232,181,90,0.35); }
+
+  /* ── BATTER NOTE QUICKVIEW MODAL ── */
+  #batterNoteModal {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    background: #161b22; border: 1.5px solid #e8b55a; border-radius: 12px;
+    padding: 18px 20px; z-index: 200; width: min(340px, 90%);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+  }
+  #batterNoteModal h4 { margin: 0 0 10px; color: #e8b55a; font-size: 0.95rem; }
+  #batterNoteModal textarea {
+    width: 100%; box-sizing: border-box; min-height: 100px;
+    background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+    border-radius: 6px; padding: 8px 10px; font-size: 0.85rem; resize: vertical;
+  }
+  #batterNoteModal .batter-note-close {
+    margin-top: 10px; float: right;
+    background: none; border: 1px solid #30363d; color: #8b949e;
+    border-radius: 5px; padding: 4px 12px; font-size: 0.75rem; cursor: pointer;
+  }
+  #batterNoteModal .batter-note-close:hover { border-color: #8b949e; color: #e6edf3; }
+  #spray-chart-body { position: relative; }
+
   /* ── EXCLUDE / GUEST ── */
   .lineup-item.excluded { opacity: 0.4; }
   .lineup-item.excluded .lineup-name { text-decoration: line-through; color: #8b949e; }
@@ -2726,12 +2757,19 @@ function showBatterAtIndex(idx) {
   const displayName = badge ? `${badge}  ${playerName}` : playerName;
   const zoneTotal   = ZONES.reduce((s, z) => s + (zones[z]?.total || 0), 0);
 
+  // Check if this player has a note
+  const _noteCheck = loadNotes();
+  const _playerNote = (_noteCheck.players[playerName] || '').trim();
+  const noteIcon = _playerNote
+    ? `<span class="batter-note-icon" onclick="openBatterNoteModal()" title="Scout note">📝</span>`
+    : '';
+
   const navBar = `
     <div class="batter-nav-bar">
       <button class="batter-nav-arrow" onclick="prevBatter()" title="Previous batter">◀</button>
       <div class="batter-nav-info">
         <div class="batter-nav-label">Batter ${pos} of ${total}</div>
-        <div class="batter-nav-name">${displayName}</div>
+        <div class="batter-nav-name" style="display:flex;align-items:center;gap:4px">${displayName}${noteIcon}</div>
       </div>
       <button class="batter-nav-arrow" onclick="nextBatter()" title="Next batter">▶</button>
     </div>
@@ -2764,6 +2802,45 @@ function exitGameView() {
   body.innerHTML = total === 0
     ? '<div class="empty-state">No offensive play data available</div>'
     : sprayBody(zones, false, null);
+}
+
+// ── Batter note quick-view modal (game view overlay) ──
+function openBatterNoteModal() {
+  const playerName = _gameViewLineup[_gameViewIndex];
+  if (!playerName) return;
+
+  // Remove any existing modal
+  const existing = document.getElementById('batterNoteModal');
+  if (existing) existing.remove();
+
+  const notes = loadNotes();
+  const current = notes.players[playerName] || '';
+  const safe = playerName.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  const modal = document.createElement('div');
+  modal.id = 'batterNoteModal';
+  modal.innerHTML = `
+    <h4>📝 ${safe}</h4>
+    <textarea id="batterNoteTA" placeholder="Scout notes…">${current.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
+    <button class="batter-note-close" onclick="closeBatterNoteModal()">Done</button>
+  `;
+
+  // Save on input
+  modal.querySelector('textarea').addEventListener('input', () => {
+    const n = loadNotes();
+    n.players[playerName] = document.getElementById('batterNoteTA').value;
+    localStorage.setItem(_notesKey(), JSON.stringify(n));
+  });
+
+  document.getElementById('spray-chart-body').appendChild(modal);
+  modal.querySelector('textarea').focus();
+}
+
+function closeBatterNoteModal() {
+  const m = document.getElementById('batterNoteModal');
+  if (m) m.remove();
+  // Refresh nav bar so note icon appears/disappears correctly
+  showBatterAtIndex(_gameViewIndex);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
