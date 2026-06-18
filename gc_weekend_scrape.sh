@@ -4,6 +4,9 @@
 # Crontab entry: 0 23 * * 6 /Users/bryanhaviland/Documents/scripts/gc_weekend_scrape.sh
 # Manual catchup: ./gc_weekend_scrape.sh 2026-06-14
 
+# ── Pull latest code from GitHub ───────────────────────────────────────────
+cd "$(dirname "${BASH_SOURCE[0]}")" && git pull origin main
+
 # ── Credentials (loaded from .env — never commit that file) ────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/.env" ]; then
