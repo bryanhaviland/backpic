@@ -1,0 +1,14 @@
+# Credentials — never commit
+.env
+
+# Logs
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Misc
+.DS_Store
+ziy66GBr
