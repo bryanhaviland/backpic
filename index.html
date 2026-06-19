@@ -2416,135 +2416,167 @@ async function runTournamentAnalysis() {
   document.getElementById('tourneySubtitle').textContent = selected.length + ' teams';
   results.innerHTML = '<div class="empty-state" style="padding:40px 0">⏳ Analyzing ' + selected.length + ' teams…</div>';
 
+  // ── keep reference so renderTourneyTab can use it ──
+  window._lastTourneySelected = selected;
+
   const idList = selected.map(t => `'${t.id}'`).join(',');
 
-  // Pull all stats in parallel — using the same tables/columns as loadTeam()
-  const [gameRows, battingRows, pitchingRows] = await Promise.all([
-    sql(`
-      SELECT team_id,
+  // Pull all stats in parallel
+  const [gameRows, battingRows, pitchingRows, recentFormRows, oppWinRows, commonOppRows] = await Promise.all([
+    sql(`SELECT team_id,
              COUNT(*)                                    AS games,
              COUNT(*) FILTER (WHERE result = 'W')        AS wins,
              COUNT(*) FILTER (WHERE result = 'L')        AS losses,
              COALESCE(SUM(runs_scored),  0)              AS runs_for,
              COALESCE(SUM(runs_allowed), 0)              AS runs_against
-      FROM games
-      WHERE team_id IN (${idList})
-        AND season = '${currentSeason}'
-      GROUP BY team_id
-    `),
-    sql(`
-      SELECT gbs.team_id,
-             CASE WHEN SUM(gbs.ab) > 0
-                  THEN ROUND(SUM(gbs.h)::NUMERIC / SUM(gbs.ab), 3)
-             END AS avg_ba,
-             CASE WHEN (SUM(gbs.ab) + SUM(gbs.bb) + SUM(COALESCE(gbs.hbp,0))) > 0
-                  THEN ROUND((SUM(gbs.h) + SUM(gbs.bb) + SUM(COALESCE(gbs.hbp,0)))::NUMERIC
-                             / (SUM(gbs.ab) + SUM(gbs.bb) + SUM(COALESCE(gbs.hbp,0))), 3)
-             END AS avg_obp,
-             CASE WHEN SUM(gbs.ab) > 0
-                  THEN ROUND((SUM(gbs.h) + SUM(gbs.doubles) + 2*SUM(gbs.triples) + 3*SUM(gbs.hr))::NUMERIC
-                             / SUM(gbs.ab), 3)
-             END AS avg_slg
-      FROM game_batting_stats gbs
-      JOIN games g ON g.id = gbs.game_id
-      WHERE gbs.team_id IN (${idList})
-        AND g.season = '${currentSeason}'
-      GROUP BY gbs.team_id
-    `),
-    sql(`
-      SELECT gps.team_id,
-             CASE WHEN SUM(gps.ip) > 0
-                  THEN ROUND(SUM(gps.er)::NUMERIC * 7 / SUM(gps.ip), 2)
-             END AS avg_era,
-             CASE WHEN SUM(gps.ip) > 0
-                  THEN ROUND((SUM(gps.bb) + SUM(gps.h))::NUMERIC / SUM(gps.ip), 2)
-             END AS avg_whip,
-             SUM(gps.so)  AS total_k,
-             SUM(gps.ip)  AS total_ip
-      FROM game_pitching_stats gps
-      JOIN games g ON g.id = gps.game_id
-      WHERE gps.team_id IN (${idList})
-        AND g.season = '${currentSeason}'
-      GROUP BY gps.team_id
-    `)
+         FROM games WHERE team_id IN (${idList}) AND season='${currentSeason}'
+         GROUP BY team_id`),
+    sql(`SELECT gbs.team_id,
+             CASE WHEN SUM(gbs.ab)>0 THEN ROUND(SUM(gbs.h)::NUMERIC/SUM(gbs.ab),3) END AS avg_ba,
+             CASE WHEN (SUM(gbs.ab)+SUM(gbs.bb)+SUM(COALESCE(gbs.hbp,0)))>0
+                  THEN ROUND((SUM(gbs.h)+SUM(gbs.bb)+SUM(COALESCE(gbs.hbp,0)))::NUMERIC
+                             /(SUM(gbs.ab)+SUM(gbs.bb)+SUM(COALESCE(gbs.hbp,0))),3) END AS avg_obp,
+             CASE WHEN SUM(gbs.ab)>0
+                  THEN ROUND((SUM(gbs.h)+SUM(gbs.doubles)+2*SUM(gbs.triples)+3*SUM(gbs.hr))::NUMERIC
+                             /SUM(gbs.ab),3) END AS avg_slg
+         FROM game_batting_stats gbs JOIN games g ON g.id=gbs.game_id
+         WHERE gbs.team_id IN (${idList}) AND g.season='${currentSeason}'
+         GROUP BY gbs.team_id`),
+    sql(`SELECT gps.team_id,
+             CASE WHEN SUM(gps.ip)>0 THEN ROUND(SUM(gps.er)::NUMERIC*7/SUM(gps.ip),2) END AS avg_era,
+             CASE WHEN SUM(gps.ip)>0 THEN ROUND((SUM(gps.bb)+SUM(gps.h))::NUMERIC/SUM(gps.ip),2) END AS avg_whip
+         FROM game_pitching_stats gps JOIN games g ON g.id=gps.game_id
+         WHERE gps.team_id IN (${idList}) AND g.season='${currentSeason}'
+         GROUP BY gps.team_id`),
+    // Last 5 games per team
+    sql(`SELECT team_id, result, runs_scored, runs_allowed, game_date, opponent
+         FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY team_id ORDER BY game_date DESC) AS rn
+               FROM games WHERE team_id IN (${idList}) AND season='${currentSeason}') sub
+         WHERE rn <= 5 ORDER BY team_id, rn`),
+    // Opponent win rates (for quality tier)
+    sql(`SELECT g.team_id, g.opponent, g.result, g.runs_scored, g.runs_allowed,
+             os.opp_wins, os.opp_losses, os.total_games,
+             CASE WHEN os.total_games>0 THEN ROUND(os.opp_wins::NUMERIC/os.total_games,3) END AS opp_wpct
+         FROM games g
+         JOIN (SELECT opponent, COUNT(*) AS total_games,
+                      COUNT(*) FILTER (WHERE result='L') AS opp_wins,
+                      COUNT(*) FILTER (WHERE result='W') AS opp_losses
+               FROM games GROUP BY opponent) os ON os.opponent=g.opponent
+         WHERE g.team_id IN (${idList}) AND g.season='${currentSeason}'`),
+    // Common opponents (played by 2+ selected teams)
+    sql(`SELECT g.team_id, g.opponent, g.result, g.runs_scored, g.runs_allowed, g.game_date
+         FROM games g
+         WHERE g.team_id IN (${idList}) AND g.season='${currentSeason}'
+           AND g.opponent IN (
+             SELECT opponent FROM games
+             WHERE team_id IN (${idList}) AND season='${currentSeason}'
+             GROUP BY opponent HAVING COUNT(DISTINCT team_id) >= 2
+           )
+         ORDER BY g.opponent, g.team_id, g.game_date`)
   ]);
 
   // Index by team_id
-  const gMap = Object.fromEntries(gameRows.map(r => [r.team_id, r]));
-  const bMap = Object.fromEntries(battingRows.map(r => [r.team_id, r]));
-  const pMap = Object.fromEntries(pitchingRows.map(r => [r.team_id, r]));
+  const gMap   = Object.fromEntries(gameRows.map(r => [r.team_id, r]));
+  const bMap   = Object.fromEntries(battingRows.map(r => [r.team_id, r]));
+  const pMap   = Object.fromEntries(pitchingRows.map(r => [r.team_id, r]));
 
-  // Score each team (0–100 composite)
+  // Recent form: map team_id -> array of last 5 results (index 0 = most recent)
+  const formMap = {};
+  recentFormRows.forEach(r => {
+    if (!formMap[r.team_id]) formMap[r.team_id] = [];
+    formMap[r.team_id].push(r);
+  });
+
+  // Opponent win rate map: team_id -> array of their game rows with opp_wpct
+  const oppMap = {};
+  oppWinRows.forEach(r => {
+    if (!oppMap[r.team_id]) oppMap[r.team_id] = [];
+    oppMap[r.team_id].push(r);
+  });
+
+  // Quality win tiers per team
+  function qualityTiers(teamId) {
+    const rows = oppMap[teamId] || [];
+    let t1=0, t2=0, t3=0;
+    rows.filter(r => r.result === 'W').forEach(r => {
+      const wp = parseFloat(r.opp_wpct || 0);
+      if (wp > 0.500) t1++;
+      else if (wp >= 0.400) t2++;
+      else t3++;
+    });
+    return { t1, t2, t3 };
+  }
+
+  // Score each team
   const scored = selected.map(t => {
     const g = gMap[t.id] || {};
     const b = bMap[t.id] || {};
     const p = pMap[t.id] || {};
-
-    const games   = Number(g.games  || 0);
-    const wins    = Number(g.wins   || 0);
-    const losses  = Number(g.losses || 0);
-    const wpct    = games > 0 ? wins / games : 0;
-    const runDiff = Number(g.runs_for || 0) - Number(g.runs_against || 0);
+    const games    = Number(g.games  || 0);
+    const wins     = Number(g.wins   || 0);
+    const losses   = Number(g.losses || 0);
+    const wpct     = games > 0 ? wins / games : 0;
+    const runDiff  = Number(g.runs_for || 0) - Number(g.runs_against || 0);
     const rdPerGame = games > 0 ? runDiff / games : 0;
-    const ba      = Number(b.avg_ba  || 0);
-    const obp     = Number(b.avg_obp || 0);
-    const slg     = Number(b.avg_slg || 0);
-    const era     = Number(p.avg_era || 9.99);  // lower = better
-    const whip    = Number(p.avg_whip || 3.0);
+    const runsPerG  = games > 0 ? Number(g.runs_for   || 0) / games : 0;
+    const allowPerG = games > 0 ? Number(g.runs_against || 0) / games : 0;
+    const ba    = Number(b.avg_ba  || 0);
+    const obp   = Number(b.avg_obp || 0);
+    const slg   = Number(b.avg_slg || 0);
+    const era   = Number(p.avg_era || 9.99);
+    const whip  = Number(p.avg_whip || 3.0);
+    const form  = formMap[t.id] || [];
+    const tiers = qualityTiers(t.id);
 
-    // Composite (weights): W% 30, RD/G 20, OBP 15, SLG 15, ERA 15, WHIP 5
-    const wpctScore  = wpct * 100;
-    const rdScore    = Math.min(100, Math.max(0, 50 + rdPerGame * 5));
-    const obpScore   = Math.min(100, obp * 250);
-    const slgScore   = Math.min(100, slg * 167);
-    const eraScore   = Math.min(100, Math.max(0, 100 - era * 10));
-    const whipScore  = Math.min(100, Math.max(0, 100 - whip * 30));
+    const wpctScore = wpct * 100;
+    const rdScore   = Math.min(100, Math.max(0, 50 + rdPerGame * 5));
+    const obpScore  = Math.min(100, obp * 250);
+    const slgScore  = Math.min(100, slg * 167);
+    const eraScore  = Math.min(100, Math.max(0, 100 - era * 10));
+    const whipScore = Math.min(100, Math.max(0, 100 - whip * 30));
+    const composite = wpctScore*0.30 + rdScore*0.20 + obpScore*0.15 + slgScore*0.15 + eraScore*0.15 + whipScore*0.05;
 
-    const composite = (
-      wpctScore  * 0.30 +
-      rdScore    * 0.20 +
-      obpScore   * 0.15 +
-      slgScore   * 0.15 +
-      eraScore   * 0.15 +
-      whipScore  * 0.05
-    );
-
-    return { t, g, b, p, games, wins, losses, wpct, rdPerGame, ba, obp, slg, era, whip, composite };
+    return { t, g, b, p, games, wins, losses, wpct, rdPerGame, runsPerG, allowPerG, ba, obp, slg, era, whip, composite, form, tiers };
   });
 
-  // Sort descending
   scored.sort((a, b) => b.composite - a.composite);
   const maxScore = scored[0].composite || 1;
 
-  // Generate AI notes
+  // AI notes
   const aiNotes = {};
   try {
     const notesData = scored.map((s, i) => ({
-      rank: i + 1,
-      team: s.t.name,
-      record: `${s.wins}-${s.losses}`,
-      wpct: (s.wpct * 100).toFixed(1) + '%',
-      rdPerGame: s.rdPerGame.toFixed(1),
-      ba: s.ba.toFixed(3),
-      era: s.era.toFixed(2)
+      rank: i+1, team: s.t.name,
+      record: `${s.wins}-${s.losses}`, wpct: (s.wpct*100).toFixed(1)+'%',
+      rdPerGame: s.rdPerGame.toFixed(1), ba: s.ba.toFixed(3), era: s.era.toFixed(2),
+      qualityTier1Wins: s.tiers.t1, recentForm: s.form.map(f => f.result).join('')
     }));
     const aiText = await getCowork().askClaude(
-      'You are a softball scout. For each team in this tournament seeding, write ONE punchy scouting sentence (max 18 words) — what makes them dangerous or concerning. Return JSON: {"Team Name": "note", ...}',
+      'You are a softball scout. For each team, write ONE punchy scouting sentence (max 20 words) covering their biggest strength or weakness, accounting for quality wins and recent form. Return JSON: {"Team Name": "note", ...}',
       notesData
     );
-    let parsed = {};
-    try { parsed = JSON.parse(aiText); } catch { /* best-effort */ }
-    Object.assign(aiNotes, parsed);
-  } catch(e) { /* skip AI if unavailable */ }
+    try { Object.assign(aiNotes, JSON.parse(aiText)); } catch { /* best-effort */ }
+  } catch(e) {}
 
-  // Render cards
+  // ── Build recent form bubbles ──
+  function formBubbles(form) {
+    if (!form.length) return '<span style="color:#8b949e;font-size:0.75rem">No data</span>';
+    return form.map(f => {
+      const color = f.result==='W' ? '#3fb950' : f.result==='L' ? '#f85149' : '#8b949e';
+      const score = (f.runs_scored != null && f.runs_allowed != null) ? `${f.runs_scored}-${f.runs_allowed}` : '';
+      return `<span title="${f.opponent||''} ${score}" style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:${color};color:#fff;font-size:0.72rem;font-weight:800;margin:0 2px">${f.result}</span>`;
+    }).join('');
+  }
+
+  // ── Team cards ──
   const medalColors = ['rank-1','rank-2','rank-3'];
   const html = scored.map((s, i) => {
     const rankClass = i < 3 ? medalColors[i] : 'rank-other';
     const rankLabel = i < 3 ? ['🥇','🥈','🥉'][i] : `#${i+1}`;
-    const barW = Math.round((s.composite / maxScore) * 100);
-    const note = aiNotes[s.t.name] || '';
+    const barW  = Math.round((s.composite / maxScore) * 100);
+    const note  = aiNotes[s.t.name] || '';
     const recStr = `${s.wins}-${s.losses}${s.games ? ' ('+s.games+' G)' : ''}`;
+    const { t1, t2, t3 } = s.tiers;
 
     return `
     <div class="team-card">
@@ -2560,28 +2592,82 @@ async function runTournamentAnalysis() {
         </div>
         <div style="color:#8b949e;margin-left:8px;font-size:0.8rem">▼</div>
       </div>
-      <div style="padding:0 16px 10px">
-        <div class="score-bar" style="width:${barW}%"></div>
-      </div>
+      <div style="padding:0 16px 10px"><div class="score-bar" style="width:${barW}%"></div></div>
       <div class="team-card-body">
         ${note ? `<div style="color:#c9d1d9;font-style:italic;font-size:0.85rem;margin-bottom:12px;padding:8px 10px;background:#1f2937;border-radius:5px;border-left:3px solid #e8b55a">"${note}"</div>` : ''}
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:0.82rem">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
+          <span style="color:#8b949e;font-size:0.72rem;flex-shrink:0">Last 5:</span>
+          ${formBubbles(s.form)}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:0.82rem;margin-bottom:10px">
           ${statCell('W%', (s.wpct*100).toFixed(1)+'%')}
-          ${statCell('R Diff/G', s.rdPerGame > 0 ? '+'+s.rdPerGame.toFixed(1) : s.rdPerGame.toFixed(1))}
-          ${statCell('BA', s.ba > 0 ? '.'+String(s.ba.toFixed(3)).split('.')[1] : '—')}
+          ${statCell('Runs/G', s.runsPerG.toFixed(1))}
+          ${statCell('Allowed/G', s.allowPerG.toFixed(1))}
+          ${statCell('Run Diff', s.rdPerGame > 0 ? '+'+s.rdPerGame.toFixed(1) : s.rdPerGame.toFixed(1))}
           ${statCell('OBP', s.obp > 0 ? s.obp.toFixed(3) : '—')}
-          ${statCell('SLG', s.slg > 0 ? s.slg.toFixed(3) : '—')}
           ${statCell('ERA', s.era < 9 ? s.era.toFixed(2) : '—')}
+        </div>
+        <div style="font-size:0.75rem;color:#8b949e">
+          Quality Wins: <span style="color:#3fb950;font-weight:700">T1: ${t1}</span>
+          <span style="color:#8b949e"> · </span><span style="color:#e8b55a;font-weight:700">T2: ${t2}</span>
+          <span style="color:#8b949e"> · </span><span style="color:#6e7681;font-weight:700">T3: ${t3}</span>
+          <span style="color:#8b949e;margin-left:6px;font-size:0.68rem">(T1=win vs >.500 · T2=.400–.500 · T3=&lt;.400)</span>
         </div>
       </div>
     </div>`;
   }).join('');
 
+  // ── Common opponents comparison ──
+  const commonOppByName = {};
+  commonOppRows.forEach(r => {
+    if (!commonOppByName[r.opponent]) commonOppByName[r.opponent] = {};
+    if (!commonOppByName[r.opponent][r.team_id]) commonOppByName[r.opponent][r.team_id] = [];
+    commonOppByName[r.opponent][r.team_id].push(r);
+  });
+
+  const commonOppNames = Object.keys(commonOppByName).sort();
+  let commonHTML = '';
+  if (commonOppNames.length) {
+    const teamCols = scored.map(s => `<th style="color:#e8b55a;font-size:0.72rem;padding:6px 8px;white-space:nowrap">${s.t.name.split(' ').slice(0,3).join(' ')}</th>`).join('');
+    const rows = commonOppNames.map(opp => {
+      const cells = scored.map(s => {
+        const games = (commonOppByName[opp][s.t.id] || []);
+        if (!games.length) return `<td style="padding:6px 8px;text-align:center;color:#30363d">—</td>`;
+        const parts = games.map(g => {
+          const diff = (g.runs_scored||0) - (g.runs_allowed||0);
+          const col  = g.result==='W' ? '#3fb950' : g.result==='L' ? '#f85149' : '#8b949e';
+          const sign = diff > 0 ? '+' : '';
+          return `<span style="color:${col};font-weight:700">${g.result}</span> <span style="font-size:0.72rem;color:#8b949e">${g.runs_scored}-${g.runs_allowed} (${sign}${diff})</span>`;
+        });
+        return `<td style="padding:6px 8px;text-align:center;white-space:nowrap">${parts.join('<br>')}</td>`;
+      }).join('');
+      return `<tr style="border-bottom:1px solid #21262d"><td style="padding:6px 8px;color:#c9d1d9;font-size:0.8rem;white-space:nowrap">${opp}</td>${cells}</tr>`;
+    }).join('');
+
+    commonHTML = `
+      <div style="margin-top:24px">
+        <div class="sec-title" style="margin-bottom:10px">🔄 Common Opponents</div>
+        <div style="font-size:0.72rem;color:#8b949e;margin-bottom:10px">Score and run diff vs shared opponents. Green = win, red = loss. Larger margin gap signals relative strength.</div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+            <thead><tr style="border-bottom:2px solid #30363d">
+              <th style="color:#8b949e;font-size:0.72rem;padding:6px 8px;text-align:left">Opponent</th>
+              ${teamCols}
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>`;
+  } else {
+    commonHTML = `<div style="margin-top:24px;color:#8b949e;font-size:0.82rem">No common opponents found between these teams this season.</div>`;
+  }
+
   results.innerHTML = `
     <div style="margin-bottom:16px;color:#8b949e;font-size:0.82rem">
-      Teams ranked by composite strength score (Win%, Run Differential, Batting, Pitching)
+      Ranked by composite score · Quality wins: T1 vs >.500 · T2 vs .400–.500 · T3 vs sub-.400
     </div>
     ${html}
+    ${commonHTML}
   `;
 }
 
