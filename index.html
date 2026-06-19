@@ -3118,15 +3118,26 @@ function addGuestToLineupModal(name) {
   renumberLineupItems();
 }
 
-(async () => {
-  // If inside Cowork, wait for the runtime to inject window.cowork (up to 10s)
-  let tries = 0;
-  while (!getCowork() && tries < 100) {
-    await new Promise(r => setTimeout(r, 100));
-    tries++;
+// Boot immediately — sql() already detects Cowork vs. standalone on every call,
+// so there's no need to block the UI waiting for window.cowork to appear.
+// If init() fails or comes back with no teams (e.g. Cowork injects its bridge a
+// moment after page load, or a transient network hiccup), retry with backoff.
+async function bootInit(attempt = 1) {
+  try {
+    await init();
+    if (!allTeamsForModal.length && attempt < 6) {
+      await new Promise(r => setTimeout(r, attempt * 500));
+      return bootInit(attempt + 1);
+    }
+  } catch (e) {
+    console.error('bootInit attempt ' + attempt + ' failed:', e);
+    if (attempt < 6) {
+      await new Promise(r => setTimeout(r, attempt * 500));
+      return bootInit(attempt + 1);
+    }
   }
-  await init();
-})();
+}
+bootInit();
 
 // ════════════════════════════════════════════════════════════════════════════
 //  NOTES MODAL — team + per-player scout notes with speech-to-text
