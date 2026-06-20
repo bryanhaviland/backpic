@@ -761,6 +761,19 @@
   }
   .exit-game-view-btn:hover { color: #e6edf3; border-color: #8b949e; }
 
+  /* ── LINEUP MOVE BUTTONS (touch-friendly reorder) ── */
+  .lineup-move-btns {
+    display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; margin-left: 4px;
+  }
+  .lineup-move-btn {
+    background: #21262d; border: 1px solid #30363d; color: #8b949e;
+    border-radius: 4px; width: 26px; height: 20px; font-size: 0.65rem;
+    cursor: pointer; line-height: 1; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .lineup-move-btn:hover { background: #30363d; color: #e8b55a; border-color: #e8b55a; }
+  .lineup-move-btn:active { background: #e8b55a; color: #000; }
+
   /* ── BATTER NOTE ICON ── */
   .batter-note-icon {
     display: inline-flex; align-items: center; justify-content: center;
@@ -2744,6 +2757,10 @@ function openGameViewModal() {
       <span class="lineup-pos">${i + 1}</span>
       <span class="lineup-jersey">${jerseyDisp}</span>
       <span class="lineup-name">${name}</span>
+      <div class="lineup-move-btns">
+        <button class="lineup-move-btn" onclick="moveLineupItem(this.closest('.lineup-item'),-1)" title="Move up">▲</button>
+        <button class="lineup-move-btn" onclick="moveLineupItem(this.closest('.lineup-item'),1)" title="Move down">▼</button>
+      </div>
       <button class="lineup-exclude-btn" onclick="toggleExcludeItem(this.closest('.lineup-item'))">${exLabel}</button>
     </div>`;
   }).join('');
@@ -2781,6 +2798,20 @@ function gvDrop(e, el) {
   if (srcIdx < tgtIdx) list.insertBefore(_gvDragSrc, el.nextSibling);
   else                 list.insertBefore(_gvDragSrc, el);
   // Renumber position badges
+  [...list.children].forEach((item, i) => {
+    item.querySelector('.lineup-pos').textContent = i + 1;
+  });
+}
+
+// ── Touch-friendly reorder (Up/Down buttons) — works on phones/tablets where
+// native HTML5 drag-and-drop does not fire ──
+function moveLineupItem(el, dir) {
+  if (!el) return;
+  const sibling = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
+  if (!sibling) return; // already at top/bottom
+  const list = el.parentElement;
+  if (dir < 0) list.insertBefore(el, sibling);
+  else         list.insertBefore(sibling, el);
   [...list.children].forEach((item, i) => {
     item.querySelector('.lineup-pos').textContent = i + 1;
   });
