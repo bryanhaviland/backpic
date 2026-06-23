@@ -848,8 +848,134 @@
   .player-name { font-weight: 600; color: #e6edf3; }
   .player-stat { color: #e8b55a; font-weight: 600; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+/* ── AUTH SCREEN ───────────────────────────────────────────────────── */
+#authScreen {
+  position: fixed; inset: 0; z-index: 9999;
+  background: #0d1117;
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.auth-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 16px;
+  padding: 36px 32px 32px;
+  width: 100%; max-width: 400px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+}
+.auth-logo {
+  text-align: center;
+  font-size: 1.6rem; font-weight: 800;
+  letter-spacing: 2px; text-transform: uppercase;
+  color: #fff; margin-bottom: 4px;
+}
+.auth-logo-gold { color: #e8b55a; }
+.auth-logo-out  {
+  color: #e8b55a; font-size: 1.25em; letter-spacing: 3px;
+  text-shadow: 0 0 12px rgba(232,181,90,0.55);
+}
+.auth-subtitle {
+  text-align: center; color: #8b949e;
+  font-size: 0.78rem; letter-spacing: 2px; text-transform: uppercase;
+  margin-bottom: 28px;
+}
+.auth-form-title {
+  font-size: 1rem; font-weight: 700; color: #e6edf3;
+  margin-bottom: 16px; text-align: center;
+}
+.auth-input {
+  width: 100%; background: #0d1117; border: 1px solid #30363d;
+  border-radius: 8px; padding: 10px 13px; color: #e6edf3;
+  font-size: 0.9rem; margin-bottom: 10px; outline: none;
+  transition: border-color 0.15s;
+}
+.auth-input:focus { border-color: #e8b55a; }
+.auth-input::placeholder { color: #484f58; }
+.auth-input-hint {
+  font-size: 0.73rem; color: #8b949e; margin-top: -6px;
+  margin-bottom: 12px; padding: 0 2px; line-height: 1.4;
+}
+.auth-btn {
+  width: 100%; background: #e8b55a; color: #000;
+  border: none; border-radius: 8px; padding: 11px;
+  font-size: 0.9rem; font-weight: 700; cursor: pointer;
+  margin-top: 4px; transition: background 0.15s; letter-spacing: 0.5px;
+}
+.auth-btn:hover  { background: #f0c36d; }
+.auth-btn:active { background: #c99b3e; }
+.auth-btn:disabled { background: #484f58; color: #8b949e; cursor: default; }
+.auth-error {
+  color: #f85149; font-size: 0.8rem; min-height: 18px;
+  margin-bottom: 6px; text-align: center;
+}
+.auth-toggle {
+  text-align: center; margin-top: 16px;
+  font-size: 0.82rem; color: #8b949e;
+}
+.auth-toggle a { color: #e8b55a; text-decoration: none; }
+.auth-toggle a:hover { text-decoration: underline; }
+.auth-divider {
+  border: none; border-top: 1px solid #21262d;
+  margin: 20px 0;
+}
+/* User badge in header */
+#userBadge {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.75rem; color: #8b949e;
+}
+#userBadge .user-email {
+  max-width: 160px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+#userBadge .logout-btn {
+  background: none; border: 1px solid #30363d; color: #8b949e;
+  border-radius: 6px; padding: 3px 8px; font-size: 0.72rem;
+  cursor: pointer; transition: all 0.15s;
+}
+#userBadge .logout-btn:hover { border-color: #f85149; color: #f85149; }
+</style>
 </head>
 <body>
+
+<!-- ══════════════════════════════════════════════════════ AUTH SCREEN -->
+<div id="authScreen">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <span class="auth-logo-gold">Back</span><span class="auth-logo-gold">Pic</span>&nbsp;Sc<span class="auth-logo-out">OUT</span>ing
+    </div>
+    <div class="auth-subtitle">Softball Scouting Reports</div>
+
+    <!-- LOGIN FORM -->
+    <div id="loginForm">
+      <div class="auth-form-title">Sign In</div>
+      <input type="email"    id="loginEmail"    class="auth-input" placeholder="Email address" autocomplete="email">
+      <input type="password" id="loginPassword" class="auth-input" placeholder="Password"      autocomplete="current-password">
+      <div id="loginError" class="auth-error"></div>
+      <button id="loginBtn" class="auth-btn" onclick="doLogin()">Sign In</button>
+      <div class="auth-toggle">New to BackPic? <a href="#" onclick="showSignup(event)">Create account</a></div>
+    </div>
+
+    <!-- SIGNUP FORM (hidden by default) -->
+    <div id="signupForm" style="display:none">
+      <div class="auth-form-title">Create Account</div>
+      <input type="email"    id="signupEmail"    class="auth-input" placeholder="Email address"    autocomplete="email">
+      <input type="password" id="signupPassword" class="auth-input" placeholder="Password (min 8 chars)" autocomplete="new-password">
+      <hr class="auth-divider">
+      <input type="text" id="signupTeamName" class="auth-input"
+             placeholder="Your team name in GameChanger"
+             autocomplete="off">
+      <div class="auth-input-hint">Enter your team name <strong style="color:#e6edf3">exactly</strong> as it appears in GameChanger (e.g. "Lady Canes 12U" or "Nitro Fastpitch"). This links your account to your team's data.</div>
+      <div id="signupError" class="auth-error"></div>
+      <button id="signupBtn" class="auth-btn" onclick="doSignup()">Create Account</button>
+      <div class="auth-toggle">Already have an account? <a href="#" onclick="showLogin(event)">Sign in</a></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ APP (hidden until auth) -->
+<div id="appScreen" style="display:none">
 
 <!-- ══════════════════════════════════════════════════════ HEADER -->
 <div class="header">
@@ -877,6 +1003,11 @@
   </div>
   <!-- hidden select keeps loadTeam() working unchanged -->
   <select id="teamSel" style="display:none"><option value="">—</option></select>
+  <!-- User badge row -->
+  <div id="userBadge" style="display:none;justify-content:flex-end;padding:4px 12px 6px">
+    <span class="user-email" id="userEmail"></span>
+    <button class="logout-btn" onclick="doLogout()">Sign Out</button>
+  </div>
 </div>
 
 <!-- ══════════════════════════════════════════════════════ SCOUT A TEAM MODAL -->
@@ -1058,6 +1189,8 @@
 <div id="tab-hithre"   class="tab-panel"><div class="empty-state">Select a team first</div></div>
 <div id="tab-pitching" class="tab-panel"><div class="empty-state">Select a team first</div></div>
 <div id="tab-catching" class="tab-panel"><div class="empty-state">Select a team first</div></div>
+
+</div><!-- /appScreen -->
 
 <script>
 // ════════════════════════════════════════════════════════════════════════════
@@ -1268,12 +1401,15 @@ async function sql(query) {
     return parseMcp(r);
   } else {
     // Standalone browser — direct Supabase REST
+    // Use the logged-in user's JWT when available; fall back to anon key
+    const _session = _sbClient ? (await _sbClient.auth.getSession()).data.session : null;
+    const _bearer  = (_session && _session.access_token) ? _session.access_token : SUPABASE_KEY;
     const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/exec_sql`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`
+        'Authorization': `Bearer ${_bearer}`
       },
       body: JSON.stringify({ query_text: query })
     });
@@ -3168,7 +3304,7 @@ async function bootInit(attempt = 1) {
     }
   }
 }
-bootInit();
+// bootInit() is called by authReady() after a successful login — do NOT call here.
 
 // ════════════════════════════════════════════════════════════════════════════
 //  NOTES MODAL — team + per-player scout notes with speech-to-text
@@ -3336,6 +3472,129 @@ function _clearMicState() {
     b.textContent = '🎙️';
     b.title = 'Dictate';
   });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  AUTH  — Supabase email/password login + signup
+// ════════════════════════════════════════════════════════════════════════════
+
+let _sbClient = null;
+
+(function initAuth() {
+  // supabase-js UMD exposes window.supabase
+  _sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: false
+    }
+  });
+
+  // Listen for auth state changes (handles refresh on re-open)
+  _sbClient.auth.onAuthStateChange((event, session) => {
+    if (session) {
+      authReady(session);
+    } else if (event === 'SIGNED_OUT') {
+      showAuthScreen();
+    }
+  });
+
+  // Check for an existing session immediately on page load
+  _sbClient.auth.getSession().then(({ data: { session } }) => {
+    if (session) {
+      authReady(session);
+    } else {
+      showAuthScreen();
+    }
+  });
+})();
+
+function showAuthScreen() {
+  document.getElementById('authScreen').style.display = 'flex';
+  document.getElementById('appScreen').style.display  = 'none';
+}
+
+function authReady(session) {
+  // Show app, hide auth screen
+  document.getElementById('authScreen').style.display = 'none';
+  document.getElementById('appScreen').style.display  = 'block';
+
+  // Show user badge
+  const badge = document.getElementById('userBadge');
+  badge.style.display = 'flex';
+  document.getElementById('userEmail').textContent = session.user.email;
+
+  // Boot the main app
+  bootInit();
+}
+
+async function doLogin() {
+  const email    = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const errEl    = document.getElementById('loginError');
+  const btn      = document.getElementById('loginBtn');
+
+  errEl.textContent = '';
+  if (!email || !password) { errEl.textContent = 'Please enter email and password.'; return; }
+
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  const { error } = await _sbClient.auth.signInWithPassword({ email, password });
+  btn.disabled = false; btn.textContent = 'Sign In';
+
+  if (error) {
+    errEl.textContent = error.message === 'Invalid login credentials'
+      ? 'Incorrect email or password.'
+      : error.message;
+  }
+  // On success, onAuthStateChange fires authReady() automatically
+}
+
+async function doSignup() {
+  const email    = document.getElementById('signupEmail').value.trim();
+  const password = document.getElementById('signupPassword').value;
+  const teamName = document.getElementById('signupTeamName').value.trim();
+  const errEl    = document.getElementById('signupError');
+  const btn      = document.getElementById('signupBtn');
+
+  errEl.textContent = '';
+  if (!email)    { errEl.textContent = 'Email is required.'; return; }
+  if (!password || password.length < 8) { errEl.textContent = 'Password must be at least 8 characters.'; return; }
+  if (!teamName) { errEl.textContent = 'Please enter your GameChanger team name.'; return; }
+
+  btn.disabled = true; btn.textContent = 'Creating account…';
+  const { error } = await _sbClient.auth.signUp({
+    email, password,
+    options: { data: { gc_team_name: teamName, role: 'viewer' } }
+  });
+  btn.disabled = false; btn.textContent = 'Create Account';
+
+  if (error) {
+    errEl.textContent = error.message;
+  } else {
+    // Auto-confirm is on for admin-created users; for self-signup, show a message
+    errEl.style.color = '#3fb950';
+    errEl.textContent = 'Account created! Check your email to confirm, then sign in.';
+    setTimeout(() => { errEl.style.color = ''; showLogin({ preventDefault: () => {} }); }, 3000);
+  }
+}
+
+async function doLogout() {
+  await _sbClient.auth.signOut();
+  // onAuthStateChange → showAuthScreen()
+}
+
+function showSignup(e) {
+  e.preventDefault();
+  document.getElementById('loginForm').style.display  = 'none';
+  document.getElementById('signupForm').style.display = 'block';
+  document.getElementById('signupError').textContent  = '';
+}
+
+function showLogin(e) {
+  e.preventDefault();
+  document.getElementById('signupForm').style.display = 'none';
+  document.getElementById('loginForm').style.display  = 'block';
+  document.getElementById('loginError').textContent   = '';
 }
 </script>
 </body>
