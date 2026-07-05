@@ -2330,6 +2330,7 @@ def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
         print(f"[filter] --since-date {args.since_date}: {orig_count} → {len(games)} games")
 
     total_plays = 0
+    skipped_games = 0
     all_box_scores = []
 
     # Pre-fetch event IDs already in DB for this team (one REST call vs. per-game browser loads)
@@ -2351,6 +2352,7 @@ def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
             )
             if _play_check:
                 print(f"[game] {event_id} — already scraped ({len(_play_check)} plays), skipping")
+                skipped_games += 1
                 continue
 
         # Box score — batting/pitching stats + spray chart data
@@ -2416,8 +2418,10 @@ def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
     if pitching:
         upsert_pitching(sb, db_team_id, pitching)
 
-    return {"team": team_name, "gc_id": gc_team_id, "games": len(games), "plays": total_plays,
-            "batting": len(batting), "pitching": len(pitching)}
+    new_games = len(games) - skipped_games
+    return {"team": team_name, "gc_id": gc_team_id,
+            "games": len(games), "new": new_games, "skipped": skipped_games,
+            "plays": total_plays, "batting": len(batting), "pitching": len(pitching)}
 
 
 # ---------------------------------------------------------------------------
@@ -2499,8 +2503,9 @@ def run(args):
         if "error" in s:
             print(f"  ✗ {s['team']}  → ERROR: {s['error']}")
         else:
-            print(f"  ✓ {s['team']}  games={s['games']}  plays={s['plays']}  "
-                  f"batters={s['batting']}  pitchers={s['pitching']}")
+            skip_note = f"  (skipped {s['skipped']} already scraped)" if s.get('skipped') else ""
+            print(f"  ✓ {s['team']}  games={s['games']}  new={s['new']}  new_plays={s['plays']}"
+                  f"  batters={s['batting']}  pitchers={s['pitching']}{skip_note}")
     print("=" * 60)
 
 
