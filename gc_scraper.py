@@ -103,9 +103,20 @@ _TEAM_NOISE = re.compile(
     re.IGNORECASE,
 )
 
+# Regional abbreviations that show up in our --team names but get spelled out
+# in full on GameChanger's actual box-score roster name. Without expanding
+# these first, "CF Lady Canes" vs "Central Florida Lady Canes" scores well
+# below the fuzzy threshold despite being the same team — difflib has no idea
+# "CF" stands for "Central Florida".
+_ABBREV_MAP = {
+    r"\bcf\b": "central florida",
+}
+
 def _fuzzy_norm(name: str) -> str:
-    """Lowercase, strip punctuation and noise words, collapse spaces."""
+    """Lowercase, expand known abbreviations, strip punctuation/noise, collapse spaces."""
     n = name.lower()
+    for pat, repl in _ABBREV_MAP.items():
+        n = re.sub(pat, repl, n)
     n = re.sub(r"[^\w\s]", " ", n)
     n = _TEAM_NOISE.sub(" ", n)
     return re.sub(r"\s+", " ", n).strip()
@@ -260,7 +271,11 @@ class SupabaseClient:
     def select(self, table: str, filters: dict, columns: str = "*") -> list[dict]:
         params = {"select": columns}
         for col, val in filters.items():
-            params[col] = f"eq.{val}"
+            # None must use PostgREST's "is.null" — "eq.None" is the literal
+            # string "None" and never matches a real SQL NULL, which was
+            # causing lookups for un-jersey-numbered players to always miss
+            # and re-insert duplicate season rows instead of updating.
+            params[col] = "is.null" if val is None else f"eq.{val}"
         r = requests.get(f"{self.base}/{table}", headers=self.headers, params=params)
         r.raise_for_status()
         return r.json()
@@ -277,12 +292,25 @@ class SupabaseClient:
         r = requests.post(f"{self.base}/{table}", headers=self.headers, json=rows)
         r.raise_for_status()
 
-    def upsert_many(self, table: str, rows: list[dict]):
-        """Insert rows, updating on conflict (merge-duplicates)."""
+    def upsert_many(self, table: str, rows: list[dict], on_conflict: str = None):
+        """Insert rows, updating on conflict (merge-duplicates).
+
+        on_conflict must list the columns of the table's actual UNIQUE/PK
+        constraint — PostgREST defaults to the primary key otherwise, which
+        almost never matches on a fresh insert (no `id` in the payload), so
+        the real unique-constraint violation surfaces as a raw 409 no matter
+        what the Prefer header says.
+        """
         if not rows:
             return
+        params = {"on_conflict": on_conflict} if on_conflict else {}
         hdrs = {**self.headers, "Prefer": "resolution=merge-duplicates"}
-        r = requests.post(f"{self.base}/{table}", headers=hdrs, json=rows)
+        r = requests.post(f"{self.base}/{table}", headers=hdrs, params=params, json=rows)
+        if r.status_code == 409:
+            hdrs2 = {**self.headers, "Prefer": "resolution=ignore-duplicates"}
+            r = requests.post(f"{self.base}/{table}", headers=hdrs2, params=params, json=rows)
+        if r.status_code >= 400:
+            print(f"[supabase] upsert_many({table}) failed {r.status_code}: {r.text[:500]}")
         r.raise_for_status()
 
     def delete_where(self, table: str, filters: dict):
@@ -499,11 +527,24 @@ def insert_game_batting_stats(sb: SupabaseClient, team_id: int, game_id: int,
     """Write per-game batting rows for the scouted team only."""
     sb.delete_where("game_batting_stats", {"team_id": team_id, "game_id": game_id})
     section = box_score.get('scouted', {})
-    rows = []
+    rows_by_key = {}  # (player_name, player_num) -> row, merges duplicate batting-list entries
     for p in section.get('batting', []):
         if p.get('name') == 'TEAM':
             continue
-        rows.append({
+        key = (p['name'], p.get('num'))
+        if key in rows_by_key:
+            # Same player appears twice in the parsed box score (e.g. re-entry,
+            # split rows) — merge counting stats instead of emitting two rows,
+            # since Postgres' ON CONFLICT DO UPDATE can't touch the same
+            # conflict-target row twice within one INSERT batch.
+            row = rows_by_key[key]
+            for f in ("ab", "r", "h", "rbi", "bb", "so"):
+                row[f] = row.get(f, 0) + p.get(f, 0)
+            existing_pos = set(row["positions"].split(', ')) if row["positions"] else set()
+            existing_pos.update(p.get('positions', []))
+            row["positions"] = ', '.join(sorted(filter(None, existing_pos)))
+            continue
+        rows_by_key[key] = {
             "team_id": team_id,
             "game_id": game_id,
             "gc_event_id": event_id,
@@ -517,7 +558,8 @@ def insert_game_batting_stats(sb: SupabaseClient, team_id: int, game_id: int,
             "bb":  p.get('bb', 0),
             "so":  p.get('so', 0),
             "doubles": 0, "triples": 0, "hr": 0, "hbp": 0, "sb": 0, "cs": 0,
-        })
+        }
+    rows = list(rows_by_key.values())
 
     # Distribute extras (2B/3B/HR/HBP/SB/CS) to players by name prefix
     extras = section.get('extras_bat', {})
@@ -537,7 +579,8 @@ def insert_game_batting_stats(sb: SupabaseClient, team_id: int, game_id: int,
 
     if rows:
         for i in range(0, len(rows), 500):
-            sb.upsert_many("game_batting_stats", rows[i:i+500])
+            sb.upsert_many("game_batting_stats", rows[i:i+500],
+                           on_conflict="team_id,game_id,player_name,player_num")
         print(f"[supabase] {len(rows)} game_batting_stats rows → {event_id}")
 
 
@@ -547,10 +590,24 @@ def insert_game_pitching_stats(sb: SupabaseClient, team_id: int, game_id: int,
     sb.delete_where("game_pitching_stats", {"team_id": team_id, "game_id": game_id})
     section = box_score.get('scouted', {})
     extras = section.get('extras_pit', {})
-    rows = []
+    rows_by_key = {}  # (player_name, player_num) -> row, merges duplicate pitching-list entries
 
     for p in section.get('pitching', []):
         if p.get('name') == 'TEAM':
+            continue
+        key = (p['name'], p.get('num'))
+        if key in rows_by_key:
+            row = rows_by_key[key]
+            for f in ("ip", "h", "r", "er", "bb", "so"):
+                row[f] = row.get(f, 0) + p.get(f, 0)
+            pname_lower = p['name'].lower()
+            for xkey, field in [('WP', 'wp'), ('HBP', 'hbp')]:
+                for part in extras.get(xkey, '').split(','):
+                    part = part.strip()
+                    cnt_m = re.search(r'\b(\d+)$', part)
+                    cnt = int(cnt_m.group(1)) if cnt_m else 1
+                    if pname_lower.startswith(re.sub(r'\s*\d+$', '', part).strip().lower()):
+                        row[field] += cnt
             continue
         row = {
             "team_id": team_id,
@@ -592,11 +649,13 @@ def insert_game_pitching_stats(sb: SupabaseClient, team_id: int, game_id: int,
             if bf_m and pname_lower.startswith(bf_m.group(1).strip().lower()):
                 row['bf'] = int(bf_m.group(2))
 
-        rows.append(row)
+        rows_by_key[key] = row
 
+    rows = list(rows_by_key.values())
     if rows:
         for i in range(0, len(rows), 500):
-            sb.insert_many("game_pitching_stats", rows[i:i+500])
+            sb.upsert_many("game_pitching_stats", rows[i:i+500],
+                            on_conflict="team_id,game_id,player_name,player_num")
         print(f"[supabase] {len(rows)} game_pitching_stats rows → {event_id}")
 
 
@@ -2273,10 +2332,26 @@ def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
     total_plays = 0
     all_box_scores = []
 
+    # Pre-fetch event IDs already in DB for this team (one REST call vs. per-game browser loads)
+    _existing_rows = sb.select("games", {"team_id": db_team_id}, columns="id,gc_event_id")
+    _existing_games = {r["gc_event_id"]: r["id"] for r in _existing_rows}
+    print(f"[db] {len(_existing_games)} game(s) already in DB for this team")
+
     for g in games:
         event_id     = g["gc_event_id"]
         scouted_home = g.get("home_away") == "home"
         print(f"\n[game] {event_id}")
+
+        # Skip if already fully scraped — check for existing plays in DB
+        if event_id in _existing_games:
+            _play_check = sb.select(
+                "plays",
+                {"team_id": db_team_id, "game_id": _existing_games[event_id]},
+                columns="id",
+            )
+            if _play_check:
+                print(f"[game] {event_id} — already scraped ({len(_play_check)} plays), skipping")
+                continue
 
         # Box score — batting/pitching stats + spray chart data
         bs = scrape_box_score(page, gc_team_id, team_slug, event_id, team_name, args.timeout)
