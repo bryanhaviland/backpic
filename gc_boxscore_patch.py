@@ -47,6 +47,28 @@ except ImportError:
     print("ERROR: supabase-py not installed. Run: pip3 install supabase")
     sys.exit(1)
 
+# ── Auto-load .env (credentials) if present ─────────────────────────────────
+# Ensures SUPABASE_URL / SUPABASE_KEY are available even when this script is
+# invoked directly (e.g. by a scheduler) without first sourcing .env in the
+# shell. Only fills in vars that aren't already set, so an explicit
+# `source .env` or exported env still takes precedence.
+
+def _load_dotenv():
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            os.environ.setdefault(key, value)
+
+_load_dotenv()
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
