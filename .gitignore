@@ -1,5 +1,7 @@
 # Credentials — never commit
 .env
+.gc_cookies.json
+.gc_state.json
 
 # Logs
 *.log

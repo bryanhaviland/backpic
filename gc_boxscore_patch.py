@@ -13,7 +13,7 @@ Usage:
   python3 gc_boxscore_patch.py --headless \\
     --team-id mDCClxcC1LQs --team "LadyHawks Garcia" \\
     --team-id 62gwwZMxWShR --team "CF Flamingos" \\
-    2>&1 | tee ~/Documents/scripts/boxscore_patch.log
+    2>&1 | tee ~/backpic-scouting-v2/boxscore_patch.log
 
 Required env vars (same as gc_scraper.py):
   SUPABASE_URL   https://fzndpqbjmhwwouxktmol.supabase.co

@@ -935,6 +935,49 @@
   cursor: pointer; transition: all 0.15s;
 }
 #userBadge .logout-btn:hover { border-color: #f85149; color: #f85149; }
+#userBadge .admin-btn {
+  background: none; border: 1px solid #30363d; color: #e8b55a;
+  border-radius: 6px; padding: 3px 8px; font-size: 0.72rem;
+  cursor: pointer; transition: all 0.15s;
+}
+#userBadge .admin-btn:hover { border-color: #e8b55a; background: rgba(232,181,90,0.08); }
+
+/* Admin scrape modal */
+#adminModal {
+  display: none; position: fixed; inset: 0; z-index: 9000;
+  background: rgba(0,0,0,0.7); align-items: center; justify-content: center;
+}
+#adminModal.open { display: flex; }
+#adminModalCard {
+  background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+  padding: 28px 32px; width: 420px; max-width: 95vw;
+}
+#adminModalCard h3 { margin: 0 0 18px; color: #e8b55a; font-size: 1rem; letter-spacing: 1px; }
+#adminTeamInput {
+  width: 100%; box-sizing: border-box;
+  background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+  color: #e6edf3; padding: 9px 12px; font-size: 0.9rem; margin-bottom: 10px;
+}
+#adminTeamInput:focus { outline: none; border-color: #e8b55a; }
+#adminScrapeBtn {
+  width: 100%; padding: 9px; border-radius: 6px; border: none;
+  background: #e8b55a; color: #0d1117; font-weight: 700;
+  font-size: 0.9rem; cursor: pointer; margin-bottom: 18px;
+}
+#adminScrapeBtn:disabled { opacity: 0.5; cursor: default; }
+#adminJobError { color: #f85149; font-size: 0.82rem; margin-bottom: 10px; }
+#adminJobList { font-size: 0.78rem; color: #8b949e; }
+#adminJobList table { width: 100%; border-collapse: collapse; }
+#adminJobList th { color: #6e7681; font-weight: 600; text-align: left; padding: 3px 6px; }
+#adminJobList td { padding: 4px 6px; border-top: 1px solid #21262d; color: #e6edf3; }
+#adminJobList .status-pending  { color: #8b949e; }
+#adminJobList .status-running  { color: #58a6ff; }
+#adminJobList .status-completed { color: #3fb950; }
+#adminJobList .status-failed   { color: #f85149; }
+.admin-modal-close {
+  float: right; background: none; border: none; color: #8b949e;
+  font-size: 1.1rem; cursor: pointer; margin-top: -4px;
+}
 </style>
 </head>
 <body>
@@ -954,7 +997,26 @@
       <input type="password" id="loginPassword" class="auth-input" placeholder="Password"      autocomplete="current-password">
       <div id="loginError" class="auth-error"></div>
       <button id="loginBtn" class="auth-btn" onclick="doLogin()">Sign In</button>
+      <div class="auth-toggle">Forgot your password? <a href="#" onclick="showForgot(event)">Reset it</a></div>
       <div class="auth-toggle">New to BackPic? <a href="#" onclick="showSignup(event)">Create account</a></div>
+    </div>
+
+    <!-- FORGOT PASSWORD FORM (hidden by default) -->
+    <div id="forgotForm" style="display:none">
+      <div class="auth-form-title">Reset Password</div>
+      <input type="email" id="forgotEmail" class="auth-input" placeholder="Email address" autocomplete="email">
+      <div id="forgotError" class="auth-error"></div>
+      <div id="forgotSuccess" style="display:none;color:#3fb950;font-size:0.9em;margin-bottom:12px;text-align:center;">Check your email for a reset link.</div>
+      <button id="forgotBtn" class="auth-btn" onclick="doForgotPassword()">Send Reset Link</button>
+      <div class="auth-toggle">Back to <a href="#" onclick="showLogin(event)">Sign in</a></div>
+    </div>
+
+    <!-- SET NEW PASSWORD FORM (shown after clicking reset link) -->
+    <div id="resetPasswordForm" style="display:none">
+      <div class="auth-form-title">Set New Password</div>
+      <input type="password" id="resetPasswordInput" class="auth-input" placeholder="New password (min 8 chars)" autocomplete="new-password">
+      <div id="resetPasswordError" class="auth-error"></div>
+      <button id="resetPasswordBtn" class="auth-btn" onclick="doSetNewPassword()">Set Password</button>
     </div>
 
     <!-- SIGNUP FORM (hidden by default) -->
@@ -1006,7 +1068,20 @@
   <!-- User badge row -->
   <div id="userBadge" style="display:none;justify-content:flex-end;padding:4px 12px 6px">
     <span class="user-email" id="userEmail"></span>
+    <button id="adminPanelBtn" class="admin-btn" onclick="openAdminModal()" style="display:none">⚙ Admin</button>
     <button class="logout-btn" onclick="doLogout()">Sign Out</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ ADMIN MODAL -->
+<div id="adminModal" onclick="if(event.target===this)closeAdminModal()">
+  <div id="adminModalCard">
+    <button class="admin-modal-close" onclick="closeAdminModal()">✕</button>
+    <h3>⚙ ADMIN — SCRAPE TEAM</h3>
+    <input id="adminTeamInput" type="text" placeholder="Team name (e.g. Lady Canes 12U)" autocomplete="off">
+    <div id="adminJobError"></div>
+    <button id="adminScrapeBtn" onclick="submitScrapeJob()">▶ Queue Scrape</button>
+    <div id="adminJobList"><em style="color:#6e7681">Loading recent jobs…</em></div>
   </div>
 </div>
 
@@ -3486,13 +3561,20 @@ let _sbClient = null;
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: false
+      detectSessionInUrl: true
     }
   });
 
   // Listen for auth state changes (handles refresh on re-open)
   _sbClient.auth.onAuthStateChange((event, session) => {
-    if (session) {
+    if (event === 'PASSWORD_RECOVERY') {
+      // User clicked a password reset link — show the set-new-password form
+      showAuthScreen();
+      document.getElementById('loginForm').style.display        = 'none';
+      document.getElementById('signupForm').style.display       = 'none';
+      document.getElementById('forgotForm').style.display       = 'none';
+      document.getElementById('resetPasswordForm').style.display = 'block';
+    } else if (session) {
       authReady(session);
     } else if (event === 'SIGNED_OUT') {
       showAuthScreen();
@@ -3523,6 +3605,12 @@ function authReady(session) {
   const badge = document.getElementById('userBadge');
   badge.style.display = 'flex';
   document.getElementById('userEmail').textContent = session.user.email;
+
+  // Show admin button if user is admin
+  const role = session.user.user_metadata?.role;
+  if (role === 'admin') {
+    document.getElementById('adminPanelBtn').style.display = 'inline-block';
+  }
 
   // Boot the main app
   bootInit();
@@ -3583,18 +3671,151 @@ async function doLogout() {
   // onAuthStateChange → showAuthScreen()
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  ADMIN — SCRAPE JOB PANEL
+// ════════════════════════════════════════════════════════════════════════════
+
+let _adminJobRefreshInterval = null;
+
+function openAdminModal() {
+  document.getElementById('adminModal').classList.add('open');
+  document.getElementById('adminJobError').textContent = '';
+  loadAdminJobs();
+  _adminJobRefreshInterval = setInterval(loadAdminJobs, 8000);
+}
+
+function closeAdminModal() {
+  document.getElementById('adminModal').classList.remove('open');
+  clearInterval(_adminJobRefreshInterval);
+}
+
+async function submitScrapeJob() {
+  const teamName = document.getElementById('adminTeamInput').value.trim();
+  const errEl    = document.getElementById('adminScrapeBtn');
+  const errMsg   = document.getElementById('adminJobError');
+  errMsg.textContent = '';
+
+  if (!teamName) { errMsg.textContent = 'Enter a team name.'; return; }
+
+  const btn = document.getElementById('adminScrapeBtn');
+  btn.disabled = true; btn.textContent = 'Queuing…';
+
+  const { error } = await _sbClient
+    .from('scrape_jobs')
+    .insert({ team_name: teamName, status: 'pending' });
+
+  btn.disabled = false; btn.textContent = '▶ Queue Scrape';
+
+  if (error) {
+    errMsg.textContent = error.message;
+  } else {
+    document.getElementById('adminTeamInput').value = '';
+    loadAdminJobs();
+  }
+}
+
+async function loadAdminJobs() {
+  const { data, error } = await _sbClient
+    .from('scrape_jobs')
+    .select('team_name, status, created_at, result_summary, error')
+    .order('created_at', { ascending: false })
+    .limit(10);
+
+  const el = document.getElementById('adminJobList');
+  if (error || !data || data.length === 0) {
+    el.innerHTML = '<em style="color:#6e7681">No jobs yet.</em>';
+    return;
+  }
+
+  const rows = data.map(j => {
+    const ts = new Date(j.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    const note = j.status === 'failed' ? (j.error || '') : (j.result_summary || '');
+    return `<tr>
+      <td>${j.team_name}</td>
+      <td class="status-${j.status}">${j.status}</td>
+      <td style="color:#6e7681">${ts}</td>
+      <td style="color:#6e7681;font-size:0.72rem;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${note}">${note}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `<table>
+    <thead><tr><th>Team</th><th>Status</th><th>Queued</th><th>Result</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
 function showSignup(e) {
   e.preventDefault();
-  document.getElementById('loginForm').style.display  = 'none';
-  document.getElementById('signupForm').style.display = 'block';
-  document.getElementById('signupError').textContent  = '';
+  document.getElementById('loginForm').style.display        = 'none';
+  document.getElementById('forgotForm').style.display       = 'none';
+  document.getElementById('signupForm').style.display       = 'block';
+  document.getElementById('signupError').textContent        = '';
 }
 
 function showLogin(e) {
   e.preventDefault();
-  document.getElementById('signupForm').style.display = 'none';
-  document.getElementById('loginForm').style.display  = 'block';
-  document.getElementById('loginError').textContent   = '';
+  document.getElementById('signupForm').style.display       = 'none';
+  document.getElementById('forgotForm').style.display       = 'none';
+  document.getElementById('resetPasswordForm').style.display = 'none';
+  document.getElementById('loginForm').style.display        = 'block';
+  document.getElementById('loginError').textContent         = '';
+}
+
+function showForgot(e) {
+  e.preventDefault();
+  document.getElementById('loginForm').style.display        = 'none';
+  document.getElementById('signupForm').style.display       = 'none';
+  document.getElementById('forgotForm').style.display       = 'block';
+  document.getElementById('forgotError').textContent        = '';
+  document.getElementById('forgotSuccess').style.display    = 'none';
+}
+
+async function doForgotPassword() {
+  const email  = document.getElementById('forgotEmail').value.trim();
+  const errEl  = document.getElementById('forgotError');
+  const succEl = document.getElementById('forgotSuccess');
+  const btn    = document.getElementById('forgotBtn');
+
+  errEl.textContent = '';
+  succEl.style.display = 'none';
+  if (!email) { errEl.textContent = 'Please enter your email address.'; return; }
+
+  btn.disabled = true; btn.textContent = 'Sending…';
+  const { error } = await _sbClient.auth.resetPasswordForEmail(email, {
+    redirectTo: 'https://www.backpicscouting.com'
+  });
+  btn.disabled = false; btn.textContent = 'Send Reset Link';
+
+  if (error) {
+    errEl.textContent = error.message;
+  } else {
+    succEl.style.display = 'block';
+    btn.style.display = 'none';
+  }
+}
+
+async function doSetNewPassword() {
+  const password = document.getElementById('resetPasswordInput').value;
+  const errEl    = document.getElementById('resetPasswordError');
+  const btn      = document.getElementById('resetPasswordBtn');
+
+  errEl.textContent = '';
+  if (!password || password.length < 8) {
+    errEl.textContent = 'Password must be at least 8 characters.';
+    return;
+  }
+
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const { error } = await _sbClient.auth.updateUser({ password });
+  btn.disabled = false; btn.textContent = 'Set Password';
+
+  if (error) {
+    errEl.textContent = error.message;
+  } else {
+    // Password updated — Supabase session is now active, boot the app
+    const { data: { session } } = await _sbClient.auth.getSession();
+    if (session) authReady(session);
+  }
 }
 </script>
 </body>
