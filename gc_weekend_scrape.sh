@@ -19,7 +19,8 @@ else
 fi
 
 # ── Date: first arg overrides (e.g. ./gc_weekend_scrape.sh 2026-06-14) ─────
-SINCE_DATE=${1:-$(date '+%Y-%m-%d')}
+# Defaults to 8 days back so the weekly run always has overlap buffer.
+SINCE_DATE=${1:-$(date -v-8d '+%Y-%m-%d')}
 
 # ── Run ────────────────────────────────────────────────────────────────────
 LOG="$SCRIPT_DIR/scrape_run.log"
