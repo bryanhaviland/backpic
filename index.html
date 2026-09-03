@@ -1045,7 +1045,7 @@
   <div class="header-row1">
     <div class="sport-season-wrap">
       <button class="sport-toggle" id="sportToggle" onclick="toggleSport()" title="Click to switch sport">🥎</button>
-      <button class="season-btn" id="seasonBtn" onclick="openSeasonModal()">Spring 2026</button>
+      <button class="season-btn" id="seasonBtn" onclick="openSeasonModal()">Fall 2026</button>
     </div>
     <div class="header-logo">
       <span style="color:#e8b55a;font-weight:800;text-transform:uppercase;letter-spacing:2px">Back</span><span style="color:#e8b55a;font-weight:800;text-transform:uppercase;letter-spacing:2px">Pic</span>&nbsp;<span style="color:#fff;font-weight:800;text-transform:uppercase;letter-spacing:2px">Sc</span><span style="color:#e8b55a;font-weight:900;font-size:1.25em;letter-spacing:3px;text-shadow:0 0 12px rgba(232,181,90,0.6);text-transform:uppercase">OUT</span><span style="color:#fff;font-weight:800;text-transform:uppercase;letter-spacing:2px">ing</span>&nbsp;<span style="color:#8b949e;font-weight:600;font-size:0.72em;letter-spacing:3px;text-transform:uppercase">REPORTS</span>
@@ -1288,7 +1288,7 @@ const HIT_OUTCOMES = new Set(['Single','Double','Triple','HomeRun','Error']);
 //  SPORT TOGGLE  (softball default)
 // ════════════════════════════════════════════════════════════════════════════
 let currentSport  = localStorage.getItem('bp_sport')  || 'softball';
-let currentSeason = localStorage.getItem('bp_season') || 'Spring 2026';
+let currentSeason = localStorage.getItem('bp_season') || 'Fall 2026';
 
 function updateSportUI() {
   const isSoftball = currentSport === 'softball';
@@ -1328,7 +1328,7 @@ async function openSeasonModal() {
     seasons = (rows || []).map(row => row.season).filter(Boolean);
   } catch(e) {}
 
-  if (!seasons.length) seasons = ['Spring 2026', 'Summer 2026', 'Winter 2026'];
+  if (!seasons.length) seasons = ['Fall 2026', 'Summer 2026', 'Spring 2026'];
 
   listEl.innerHTML = seasons.map(s => `
     <div class="season-option ${s === currentSeason ? 'active' : ''}" onclick="selectSeason('${s}')">
