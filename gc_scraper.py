@@ -893,20 +893,41 @@ def find_team(page: Page, team_name: str, sport: str, timeout: int,
     filter_str = "  filters: " + ", ".join(filters) if filters else ""
     print(f"[search] Looking for '{team_name}'{filter_str} …")
 
-    page.goto(f"https://web.gc.com/search?query={team_name.replace(' ', '+')}", timeout=timeout)
+    # NOTE: GC's search page ignores the ?query= URL param entirely (confirmed via
+    # diagnostic: the search input always renders empty and results are a static
+    # "recommended near you" list regardless of the URL). The query must be typed
+    # into the on-page search box to actually trigger a real search.
+    page.goto("https://web.gc.com/search", timeout=timeout)
     page.wait_for_load_state("networkidle", timeout=timeout)
-    time.sleep(3)
 
-    # Collect ALL team links (not just name-matched) so we can show the full list
-    all_candidates = []
-    seen_ids = set()
+    search_box = page.locator("input[placeholder='Find a Team, League or Tournament']")
+    search_box.click()
+    search_box.fill("")
+    search_box.press_sequentially(team_name, delay=60)
+    page.wait_for_timeout(1500)
+    try:
+        page.wait_for_load_state("networkidle", timeout=timeout)
+    except Exception:
+        pass
+    time.sleep(2)
+
+    # Collect ALL team links (not just name-matched) so we can show the full list.
+    # NOTE: GC renders TWO <a href="/teams/<id>"> per result card — one wraps only the
+    # thumbnail/icon (empty innerText) and a separate one wraps the real name/season/
+    # city/staff text. Merge by id and keep the longest text instead of first-seen,
+    # otherwise the blank icon-anchor (which appears first in DOM order) wins and every
+    # candidate ends up with empty text.
+    candidates_by_id = {}
     for link in page.query_selector_all("a[href*='/teams/']"):
         href = link.get_attribute("href") or ""
         text = normalize(link.inner_text())
         m = re.search(r"/teams/([^/\?]+)", href)
-        if m and m.group(1) not in seen_ids:
-            seen_ids.add(m.group(1))
-            all_candidates.append({"id": m.group(1), "text": text})
+        if not m:
+            continue
+        tid = m.group(1)
+        if tid not in candidates_by_id or len(text) > len(candidates_by_id[tid]):
+            candidates_by_id[tid] = text
+    all_candidates = [{"id": tid, "text": text} for tid, text in candidates_by_id.items()]
 
     # Filter to candidates whose name matches the search term
     candidates = [c for c in all_candidates if team_name.lower() in c["text"].lower()]
