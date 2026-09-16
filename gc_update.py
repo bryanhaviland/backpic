@@ -414,6 +414,7 @@ def main():
             headless=args.headless,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
+        session_ok = False
         if os.path.exists(state_file):
             print(f"[auth] Loading saved session from {state_file}")
             context = browser.new_context(
@@ -421,11 +422,26 @@ def main():
                 viewport={"width": 1280, "height": 900},
             )
             page = context.new_page()
-        else:
+            # Spot-check the saved session is still live — a dead session
+            # silently degrades every scrape (wrong/missing box score data)
+            # instead of failing loudly, so verify before trusting it.
+            page.goto("https://web.gc.com", wait_until="domcontentloaded", timeout=args.timeout)
+            time.sleep(3)
+            body_len = page.evaluate("document.body ? document.body.innerText.length : 0")
+            session_ok = body_len >= 1000
+            if not session_ok:
+                print("[auth] Saved session appears expired (page body too short) — re-logging in.")
+                context.close()
+        if not session_ok:
             context = browser.new_context(viewport={"width": 1280, "height": 900})
             page    = context.new_page()
             login(page, args.timeout,
                   email=args.gc_email, password=args.gc_password)
+            try:
+                context.storage_state(path=state_file)
+                print(f"[auth] Fresh session saved to {state_file}")
+            except Exception as e:
+                print(f"[auth] Could not save fresh session state: {e}")
 
         summaries = []
         for db_team_id, gc_team_id, team_name in team_list:
