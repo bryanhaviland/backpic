@@ -631,6 +631,39 @@
   }
   @media (max-width: 680px) { .two-col { grid-template-columns: 1fr; } }
 
+  /* ── PHONE WIDTHS — header/nav were fixed-width and overflowed instead
+     of wrapping, clipping the wordmark, team button, and CATCHING tab. ── */
+  @media (max-width: 480px) {
+    .header-row1 {
+      flex-wrap: wrap;
+      row-gap: 6px;
+      justify-content: center;
+    }
+    .header-logo {
+      white-space: normal;
+      text-align: center;
+      font-size: 1.05rem;
+      flex: 1 1 100%;
+      order: 2;
+    }
+    .sport-season-wrap { order: 1; }
+    .header-row2 {
+      flex-wrap: wrap;
+      row-gap: 6px;
+    }
+    .tourney-btn {
+      font-size: 0.72rem;
+      padding: 6px 10px;
+      max-width: 44vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tab-row { padding: 0 6px; }
+    .tab-btn { padding: 9px 9px; font-size: 0.72rem; }
+    .tab-row-label { padding: 0 6px 0 2px; font-size: 0.58rem; }
+  }
+
   /* ── SCROLL BOX ── */
   .scroll-box { max-height: 380px; overflow-y: auto; }
   .scroll-box::-webkit-scrollbar { width: 4px; }
