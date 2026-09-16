@@ -405,9 +405,9 @@ def _infer_season(date_str: Optional[str]) -> Optional[str]:
         return None
     if 2 <= month_num <= 5:
         label = "Spring"
-    elif 6 <= month_num <= 8:
+    elif 6 <= month_num <= 7:
         label = "Summer"
-    elif 9 <= month_num <= 11:
+    elif 8 <= month_num <= 11:
         label = "Fall"
     else:
         label = "Winter"
