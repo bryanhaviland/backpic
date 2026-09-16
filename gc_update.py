@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gc_scraper import (
     SupabaseClient,
     login,
+    ensure_authenticated_state,
     scrape_schedule,
     scrape_box_score,
     scrape_plays,
@@ -406,42 +407,18 @@ def main():
 
     print(f"[run] {len(team_list)} team(s) queued")
 
-    # Reuse saved auth state from gc_boxscore_patch.py / gc_scraper.py if present
-    state_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".gc_state.json")
-
     with sync_playwright() as pw:
+        # Authenticate (non-headless if the saved session needs refreshing —
+        # GameChanger's login API 403s headless requests) and reuse that
+        # session in the actual (optionally headless) scrape browser.
+        state_file = ensure_authenticated_state(pw, args.timeout, args.gc_email, args.gc_password)
+
         browser = pw.chromium.launch(
             headless=args.headless,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
-        session_ok = False
-        if os.path.exists(state_file):
-            print(f"[auth] Loading saved session from {state_file}")
-            context = browser.new_context(
-                storage_state=state_file,
-                viewport={"width": 1280, "height": 900},
-            )
-            page = context.new_page()
-            # Spot-check the saved session is still live — a dead session
-            # silently degrades every scrape (wrong/missing box score data)
-            # instead of failing loudly, so verify before trusting it.
-            page.goto("https://web.gc.com", wait_until="domcontentloaded", timeout=args.timeout)
-            time.sleep(3)
-            body_len = page.evaluate("document.body ? document.body.innerText.length : 0")
-            session_ok = body_len >= 1000
-            if not session_ok:
-                print("[auth] Saved session appears expired (page body too short) — re-logging in.")
-                context.close()
-        if not session_ok:
-            context = browser.new_context(viewport={"width": 1280, "height": 900})
-            page    = context.new_page()
-            login(page, args.timeout,
-                  email=args.gc_email, password=args.gc_password)
-            try:
-                context.storage_state(path=state_file)
-                print(f"[auth] Fresh session saved to {state_file}")
-            except Exception as e:
-                print(f"[auth] Could not save fresh session state: {e}")
+        context = browser.new_context(storage_state=state_file, viewport={"width": 1280, "height": 900})
+        page    = context.new_page()
 
         summaries = []
         for db_team_id, gc_team_id, team_name in team_list:

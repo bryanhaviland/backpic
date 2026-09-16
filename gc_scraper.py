@@ -884,6 +884,94 @@ def login(page: Page, timeout: int, email: str = None, password: str = None):
 
 
 # ---------------------------------------------------------------------------
+# Authenticated session state (.gc_state.json)
+#
+# GameChanger's login API (api.team-manager.gc.com/auth) returns 403 for the
+# credential/MFA-code/password steps when driven by a headless browser — this
+# was confirmed by inspecting the actual network responses: headless gets
+# 403s and no token is ever issued, while an identical flow in a *visible*
+# (non-headless) browser gets clean 200s and a real session token, stored by
+# GC's frontend in localStorage under the key "eden-auth-tokens" (NOT in a
+# cookie, which is why cookie-based checks always looked "logged out").
+#
+# So login() itself must always run non-headless. The fix here is to
+# maintain a saved, authenticated session (.gc_state.json) that gets
+# refreshed via a one-off non-headless login whenever it's missing or stale,
+# and have every script (gc_scraper.py, gc_update.py, gc_boxscore_patch.py)
+# reuse that saved state for their actual (optionally headless) scraping
+# work instead of calling login() directly inside a headless context.
+# ---------------------------------------------------------------------------
+
+GC_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".gc_state.json")
+GC_STATE_MAX_AGE_MINUTES = 360  # re-verify (not necessarily re-login) after this long
+
+
+def _has_gc_session_token(page: Page) -> bool:
+    """True if the page's localStorage holds a GameChanger auth token."""
+    try:
+        return bool(page.evaluate("() => !!localStorage.getItem('eden-auth-tokens')"))
+    except Exception:
+        return False
+
+
+def ensure_authenticated_state(pw, timeout: int, email: str = None, password: str = None,
+                                state_file: str = None, max_age_minutes: int = None) -> str:
+    """
+    Return a path to a .gc_state.json known to hold a live GameChanger
+    session, refreshing it if needed. The refresh (login) step always runs
+    in a visible, non-headless browser — see module comment above for why.
+    """
+    state_file = state_file or GC_STATE_FILE
+    max_age_minutes = GC_STATE_MAX_AGE_MINUTES if max_age_minutes is None else max_age_minutes
+
+    if os.path.exists(state_file):
+        age_min = (time.time() - os.path.getmtime(state_file)) / 60
+        if age_min < max_age_minutes:
+            print(f"[auth] Reusing saved session ({state_file}, {age_min:.0f}m old)")
+            return state_file
+
+        # Older than the trust window — spot-check it headlessly before
+        # paying for a full non-headless re-login.
+        print(f"[auth] Saved session is {age_min:.0f}m old — verifying it's still live …")
+        try:
+            browser = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = browser.new_context(storage_state=state_file)
+            page = context.new_page()
+            page.goto("https://web.gc.com/teams", wait_until="domcontentloaded", timeout=timeout)
+            page.wait_for_timeout(2000)
+            still_valid = _has_gc_session_token(page)
+            browser.close()
+            if still_valid:
+                os.utime(state_file, None)  # bump mtime so we don't re-check every run
+                print(f"[auth] Saved session still valid: {state_file}")
+                return state_file
+            print("[auth] Saved session token is gone/expired — re-logging in.")
+        except Exception as e:
+            print(f"[auth] Saved state check failed ({e}) — re-logging in.")
+    else:
+        print(f"[auth] No saved session at {state_file} — logging in.")
+
+    print("[auth] Refreshing GameChanger session via a VISIBLE (non-headless) login "
+          "window. GameChanger's login API 403s headless requests (AWS WAF bot "
+          "detection), so this step can't run headless — expect a real browser "
+          "window to pop up on this machine.")
+    browser = pw.chromium.launch(headless=False, args=["--start-maximized"])
+    context = browser.new_context(no_viewport=True)
+    page = context.new_page()
+    login(page, timeout, email=email, password=password)
+    if not _has_gc_session_token(page):
+        browser.close()
+        raise RuntimeError(
+            "[auth] Non-headless login did not produce a session token — check "
+            "GC_EMAIL/GC_PASSWORD and that the Gmail OTP is being delivered/read."
+        )
+    context.storage_state(path=state_file)
+    browser.close()
+    print(f"[auth] Fresh authenticated session saved to {state_file}")
+    return state_file
+
+
+# ---------------------------------------------------------------------------
 # Step 1: Find team
 # ---------------------------------------------------------------------------
 
@@ -2482,15 +2570,17 @@ def run(args):
     team_list: list[tuple[str, str]] = []
 
     with sync_playwright() as pw:
+        # Authenticate (non-headless, if a refresh is needed — see
+        # ensure_authenticated_state's docstring) and reuse that saved
+        # session in the actual scrape browser, which can stay headless.
+        state_file = ensure_authenticated_state(pw, args.timeout, args.gc_email, args.gc_password)
+
         browser = pw.chromium.launch(
             headless=args.headless,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
-        context = browser.new_context(viewport={"width": 1280, "height": 900})
+        context = browser.new_context(storage_state=state_file, viewport={"width": 1280, "height": 900})
         page    = context.new_page()
-
-        # Single login for the entire run
-        login(page, args.timeout, email=args.gc_email, password=args.gc_password)
 
         # Resolve team IDs
         if args.all_teams:

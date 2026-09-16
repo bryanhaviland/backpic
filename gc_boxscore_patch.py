@@ -44,7 +44,7 @@ except ImportError:
 # Reuse gc_scraper's proven headless login (email + password + Gmail OTP
 # auto-fetch) so an expired session heals itself instead of needing a human
 # to run this once without --headless.
-from gc_scraper import login as _gc_login
+from gc_scraper import ensure_authenticated_state
 
 try:
     from supabase import create_client
@@ -1463,38 +1463,21 @@ def main():
         f"| dry_run={args.dry_run} | force={args.force} | catching_only={args.catching_only} "
         f"| pitching_only={args.pitching_only}")
     start_playwright()
-    browser, ctx, page = new_page(args.headless)
 
     # ── Auth ─────────────────────────────────────────────────────────────────
-    if args.headless:
-        session_ok = False
-        if os.path.exists(STATE_FILE):
-            # Spot-check: confirm the state is still valid
-            page.goto("https://web.gc.com", wait_until="domcontentloaded", timeout=PAGE_TIMEOUT*1000)
-            time.sleep(4)
-            body_len = page.evaluate("document.body ? document.body.innerText.length : 0")
-            session_ok = body_len >= 1000
-            if not session_ok:
-                log("Saved state appears expired (page body too short) — re-logging in.")
-                os.remove(STATE_FILE)
-                ctx.close()
-        if not session_ok:
-            # Re-login headless via email + password + Gmail OTP auto-fetch
-            # (same flow gc_scraper.py uses every run) instead of requiring
-            # a human to run this once without --headless.
-            gc_email    = os.getenv("GC_EMAIL")
-            gc_password = os.getenv("GC_PASSWORD")
-            if not gc_email or not gc_password:
-                browser.close(); stop_playwright()
-                sys.exit("ERROR: No saved state and GC_EMAIL/GC_PASSWORD not set — can't auto re-login.")
-            ctx = browser.new_context(viewport={"width": 1280, "height": 900})
-            page = ctx.new_page()
-            page.set_default_timeout(PAGE_TIMEOUT * 1000)
-            _gc_login(page, PAGE_TIMEOUT * 1000, email=gc_email, password=gc_password)
-            save_state(ctx)
-        log("GC authenticated ✓")
-    else:
-        ensure_logged_in(page, ctx)
+    # GameChanger's login API 403s headless requests (AWS WAF bot detection),
+    # so any actual re-login always runs in a visible, non-headless browser —
+    # see gc_scraper.ensure_authenticated_state's docstring. This reuses (and,
+    # if needed, refreshes) the same .gc_state.json gc_scraper.py/gc_update.py
+    # use, so a --headless run here just picks up whatever session is on disk.
+    ensure_authenticated_state(
+        _pw, PAGE_TIMEOUT * 1000,
+        email=os.getenv("GC_EMAIL"), password=os.getenv("GC_PASSWORD"),
+        state_file=STATE_FILE,
+    )
+    log("GC authenticated ✓")
+
+    browser, ctx, page = new_page(args.headless)
 
     totals = {"teams": 0, "games": 0, "batting": 0, "pitching": 0, "catching": 0}
     failed = []
