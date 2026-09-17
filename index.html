@@ -36,6 +36,7 @@
     color: #e6edf3;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     min-height: 100vh;
+    overflow-x: hidden;
     font-size: 14px;
     padding-top: env(safe-area-inset-top);
     padding-bottom: env(safe-area-inset-bottom);
@@ -614,7 +615,8 @@
     flex-wrap: wrap;
     align-items: flex-start;
   }
-  .field-wrap { flex-shrink: 0; }
+  .field-wrap { flex-shrink: 1; min-width: 0; }
+  .field-wrap svg { width: 100%; height: auto; }
   .field-sidebar { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 16px; }
 
   /* ── LEGEND ── */
@@ -662,6 +664,9 @@
     .tab-row { padding: 0 6px; }
     .tab-btn { padding: 9px 9px; font-size: 0.72rem; }
     .tab-row-label { padding: 0 6px 0 2px; font-size: 0.58rem; }
+    .field-layout { flex-direction: column; }
+    .field-wrap { width: 100%; display: flex; justify-content: center; }
+    .field-sidebar { min-width: 0; width: 100%; }
   }
 
   /* ── SCROLL BOX ── */
