@@ -38,6 +38,7 @@ import email
 import imaplib
 import os
 import re
+import subprocess
 import time
 from typing import Optional
 
@@ -1352,15 +1353,23 @@ def scrape_plays(page: Page, team_id: str, event_id: str,
     url = f"https://web.gc.com/teams/{team_id}/schedule/{event_id}/plays"
     print(f"[plays] {url}")
 
+    # Plays pages get the same GameChanger treatment as box scores — wrong
+    # (decoy) play-by-play served to Playwright/CDP-controlled browsers even
+    # authenticated — so this is fetched via the real, human Chrome browser
+    # too (see fetch_page_text_via_real_chrome's docstring on _load_box_score_page).
+    ready_js = ("document.body.innerText.includes('Top ') || "
+                "document.body.innerText.includes('Bottom ') || "
+                "document.body.innerText.includes(\"doesn't exist\")")
     try:
-        page.goto(url, timeout=timeout)
-        page.wait_for_load_state("networkidle", timeout=timeout)
-        time.sleep(3)
-    except PWTimeout:
-        print(f"[plays] Timeout: {event_id}")
+        raw = fetch_page_text_via_real_chrome(url, ready_js, timeout=max(20, timeout // 1000))
+    except Exception as e:
+        print(f"[plays] Real-Chrome fetch failed: {event_id}: {e}")
         return [], {}, {}, []
 
-    lines = page_lines(page)
+    lines = _lines_from_text(raw)
+    if not lines:
+        print(f"[plays] Timeout/no data: {event_id}")
+        return [], {}, {}, []
 
     plays = []
     catcher_stats = {"sb": 0, "cs": 0, "wp": 0, "pb": 0}
@@ -1780,28 +1789,104 @@ def _parse_pitching_section(lines: list[str]) -> list[dict]:
     return pitchers
 
 
+def _run_osascript(script: str, args: list[str] = None) -> str:
+    """Run an AppleScript, returning its stdout. Raises on a non-zero exit."""
+    cmd = ["osascript", "-"] + (args or [])
+    proc = subprocess.run(cmd, input=script, capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        raise RuntimeError(f"osascript failed: {proc.stderr.strip()}")
+    return proc.stdout
+
+
+# GameChanger silently serves DIFFERENT (wrong) box-score data — a decoy
+# roster, not an error or a login wall — to Playwright/CDP-controlled
+# browsers, authenticated or not. Confirmed by fetching the identical
+# authenticated URL both ways: Playwright returned a fabricated 9-player
+# lineup with no relation to the real team, while the same URL opened in a
+# real, human-driven Chrome (or one driven via AppleScript, which never
+# touches Chrome DevTools Protocol) returned the correct roster. So box
+# scores specifically are fetched via AppleScript against the real,
+# already-logged-in Chrome browser instead of Playwright. Schedule/roster
+# discovery elsewhere in this file is unaffected and stays on Playwright.
+_REAL_CHROME_JS_TEMPLATE = r'''
+tell application "Google Chrome"
+    activate
+    if (count of windows) is 0 then
+        make new window
+    end if
+    set newTab to make new tab at end of tabs of window 1 with properties {URL:"%(url)s"}
+    set deadline to (current date) + %(timeout)s
+    set pageText to ""
+    repeat
+        delay 1
+        try
+            set stillLoading to execute newTab javascript "document.readyState !== 'complete'"
+        on error
+            set stillLoading to true
+        end try
+        if not stillLoading then
+            try
+                set isReady to execute newTab javascript "%(ready_js)s"
+            on error
+                set isReady to false
+            end try
+            if isReady then
+                exit repeat
+            end if
+        end if
+        if (current date) > deadline then
+            exit repeat
+        end if
+    end repeat
+    delay 1
+    set pageText to execute newTab javascript "document.body.innerText"
+    close newTab
+    return pageText
+end tell
+'''
+
+
+def fetch_page_text_via_real_chrome(url: str, ready_js: str, timeout: int = 25) -> str:
+    """
+    Open `url` in a new tab of the user's actual, already-authenticated
+    Chrome (via AppleScript — no CDP/automation protocol involved) and
+    return document.body.innerText once `ready_js` evaluates truthy or the
+    timeout elapses. Requires Chrome's "View > Developer > Allow JavaScript
+    from Apple Events" to be turned on.
+    """
+    script = _REAL_CHROME_JS_TEMPLATE % {
+        "url": url.replace('"', '\\"'),
+        "ready_js": ready_js.replace('"', '\\"'),
+        "timeout": int(timeout),
+    }
+    return _run_osascript(script)
+
+
+def _lines_from_text(raw: str) -> list[str]:
+    return [normalize(ln) for ln in raw.split("\n") if normalize(ln)]
+
+
 def _load_box_score_page(page: Page, team_id: str, team_slug: Optional[str],
                           event_id: str, timeout: int) -> list[str]:
-    """Navigate to the box score page and return rendered lines."""
+    """Fetch the box score page's rendered lines via the real Chrome browser
+    (see fetch_page_text_via_real_chrome). `page`/`timeout` (a Playwright
+    Page and a millisecond timeout) are kept for call-site compatibility;
+    the actual fetch here doesn't use Playwright at all."""
     if team_slug:
         url = f"https://web.gc.com/teams/{team_id}/{team_slug}/schedule/{event_id}/box-score"
     else:
         url = f"https://web.gc.com/teams/{team_id}/schedule/{event_id}/box-score"
+    ready_js = "document.body.innerText.includes('LINEUP') || document.body.innerText.includes(\"doesn't exist\")"
     try:
-        page.goto(url, timeout=timeout)
-        # Wait for actual box score content rather than networkidle —
-        # GC's React SPA has background polling that prevents networkidle.
-        # "BATTING" appears once the game data is rendered.
-        try:
-            page.wait_for_selector("text=BATTING", timeout=timeout)
-        except PWTimeout:
-            # Fall back to a fixed sleep if the selector never appears
-            # (e.g. game with no batting stats, or slow load)
-            time.sleep(10)
-    except PWTimeout:
-        print(f"[boxscore] Timeout navigating: {event_id}")
+        raw = fetch_page_text_via_real_chrome(url, ready_js, timeout=max(20, timeout // 1000))
+    except Exception as e:
+        print(f"[boxscore] Real-Chrome fetch failed for {event_id}: {e}")
         return []
-    return page_lines(page)
+    lines = _lines_from_text(raw)
+    if not lines or not any("LINEUP" in ln for ln in lines):
+        print(f"[boxscore] Timeout/no data navigating: {event_id}")
+        return []
+    return lines
 
 
 def get_team_slug(page: Page, team_id: str, timeout: int) -> Optional[str]:
