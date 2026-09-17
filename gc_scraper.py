@@ -469,6 +469,33 @@ def upsert_game(sb: SupabaseClient, team_id: int, g: dict) -> int:
         "scraped_at": "now()",
     }
     existing = _select_one(sb, "games", {"team_id": team_id, "gc_event_id": g["gc_event_id"]})
+
+    if not existing:
+        # GameChanger can reissue a new gc_event_id for the same real schedule
+        # slot between scrapes — observed repeatedly: a game (finished or
+        # upcoming) gets a new event ID and, keyed on gc_event_id alone, we'd
+        # insert it as a brand-new row and leave the old ID's row behind as a
+        # ghost duplicate (identical opponent/date/home_away/score, dead ID).
+        # When we have a real, non-placeholder opponent and a parsed date,
+        # check for an existing row that's clearly the same slot under a
+        # different (now-stale) gc_event_id, and update it in place instead
+        # of creating a duplicate. Skip this for "TBD"/unknown-opponent or
+        # undated placeholder games, where the match key isn't reliable.
+        opponent  = (g.get("opponent") or "").strip()
+        home_away = g.get("home_away") or ""
+        if opponent and opponent.upper() != "TBD" and game_date and home_away:
+            candidate = _select_one(sb, "games", {
+                "team_id":   team_id,
+                "opponent":  opponent,
+                "home_away": home_away,
+                "game_date": game_date,
+            })
+            if candidate:
+                print(f"[game] {g['gc_event_id']} matches existing slot "
+                      f"(id={candidate['id']}) by opponent/date/home_away — "
+                      f"updating in place instead of inserting a duplicate")
+                existing = candidate
+
     if existing:
         sb.update("games", existing["id"], data)
         return existing["id"]
