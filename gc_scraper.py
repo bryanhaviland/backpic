@@ -2590,6 +2590,28 @@ def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
         games = [g for g in games if _should_include(g)]
         print(f"[filter] --since-date {args.since_date}: {orig_count} → {len(games)} games")
 
+    # Skip games that haven't been played yet — no box score/plays exist for
+    # them, so there's nothing to fetch and no reason to open a real-Chrome
+    # tab for one. A game with a future date, or with no score/result on the
+    # schedule card at all (GC hasn't posted one yet), counts as not-yet-played.
+    from datetime import date as _date
+    today_iso = _date.today().isoformat()
+
+    def _not_yet_played(g):
+        iso = _parse_game_date(g.get("full_date_raw", ""), g.get("date", ""))
+        if iso and iso > today_iso:
+            return True
+        no_score = g.get("runs_scored") is None and g.get("runs_allowed") is None
+        no_result = not g.get("result")
+        return no_score and no_result
+
+    future_games = [g for g in games if _not_yet_played(g)]
+    if future_games:
+        games = [g for g in games if not _not_yet_played(g)]
+        print(f"[filter] Skipping {len(future_games)} not-yet-played game(s) "
+              f"(future date or no score posted): "
+              f"{[g.get('full_date_raw') or g.get('date') or g['gc_event_id'] for g in future_games]}")
+
     total_plays = 0
     skipped_games = 0
     all_box_scores = []
@@ -2682,6 +2704,7 @@ def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
     new_games = len(games) - skipped_games
     return {"team": team_name, "gc_id": gc_team_id,
             "games": len(games), "new": new_games, "skipped": skipped_games,
+            "future_skipped": len(future_games),
             "plays": total_plays, "batting": len(batting), "pitching": len(pitching)}
 
 
@@ -2779,8 +2802,9 @@ def run(args):
             print(f"  ✗ {s['team']}  → ERROR: {s['error']}")
         else:
             skip_note = f"  (skipped {s['skipped']} already scraped)" if s.get('skipped') else ""
+            future_note = f"  ({s['future_skipped']} not yet played)" if s.get('future_skipped') else ""
             print(f"  ✓ {s['team']}  games={s['games']}  new={s['new']}  new_plays={s['plays']}"
-                  f"  batters={s['batting']}  pitchers={s['pitching']}{skip_note}")
+                  f"  batters={s['batting']}  pitchers={s['pitching']}{skip_note}{future_note}")
     print("=" * 60)
 
 
