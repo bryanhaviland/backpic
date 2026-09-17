@@ -36,6 +36,7 @@ import argparse
 import difflib
 import email
 import imaplib
+import json
 import os
 import re
 import subprocess
@@ -2081,14 +2082,19 @@ tell application "Google Chrome"
         end if
     end repeat
     delay 1
-    set pageText to execute newTab javascript "document.body.innerText"
+    -- Grab the page text AND the real auth-token state in the same call —
+    -- GC shows "want live stats" / "download the app" / "sign in & we land
+    -- you" teaser copy on plenty of pages (future games, restricted
+    -- previews) even while genuinely signed in, so page text alone is not
+    -- a reliable signed-out signal. localStorage's eden-auth-tokens is.
+    set pageBundle to execute newTab javascript "JSON.stringify({text: document.body.innerText, authed: !!localStorage.getItem('eden-auth-tokens')})"
     -- Pause before closing so any in-flight auth token refresh (fired on
     -- page load) has time to finish and persist before the tab is torn
     -- down — closing too fast may be killing refreshes mid-flight and
     -- burning the (rotating) refresh token without ever saving the new one.
     delay 5
     close newTab
-    return pageText
+    return pageBundle
 end tell
 '''
 
@@ -2114,8 +2120,17 @@ def fetch_page_text_via_real_chrome(url: str, ready_js: str, timeout: int = 25,
         "ready_js": ready_js.replace('"', '\\"'),
         "timeout": int(timeout),
     }
-    raw = _run_osascript(script)
-    if _looks_signed_out(raw):
+    bundle_raw = _run_osascript(script)
+    try:
+        bundle = json.loads(bundle_raw)
+        raw    = bundle.get("text", "")
+        authed = bool(bundle.get("authed"))
+    except (ValueError, AttributeError):
+        # Fetch failed before the JS even ran (e.g. osascript error text) —
+        # fall back to treating the whole thing as page text, unauthenticated.
+        raw, authed = bundle_raw, False
+
+    if _looks_signed_out(raw) and not authed:
         if _retry and attempt_real_chrome_relogin():
             print(f"[relogin] Retrying fetch: {url}")
             return fetch_page_text_via_real_chrome(url, ready_js, timeout=timeout, _retry=False)
@@ -2123,6 +2138,12 @@ def fetch_page_text_via_real_chrome(url: str, ready_js: str, timeout: int = 25,
             f"Real Chrome is signed out of GameChanger (got a 'Sign in to "
             f"GameChanger' teaser instead of real data) while fetching: {url}"
         )
+    if _looks_signed_out(raw) and authed:
+        # Still logged in (eden-auth-tokens present) — this is GC's generic
+        # locked/limited-preview teaser (shown for future games or other
+        # restricted content), not an actual sign-out. Let it flow through
+        # as normal page text; downstream parsing just finds no box score.
+        print(f"[boxscore] Restricted/limited-preview page (still signed in) — no data expected: {url}")
     return raw
 
 
