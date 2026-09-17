@@ -1362,6 +1362,9 @@ def scrape_plays(page: Page, team_id: str, event_id: str,
                 "document.body.innerText.includes(\"doesn't exist\")")
     try:
         raw = fetch_page_text_via_real_chrome(url, ready_js, timeout=max(20, timeout // 1000))
+    except GCSignedOutError as e:
+        print(f"[plays] \U0001F6A8 SIGNED OUT — aborting, no data saved: {e}")
+        raise
     except Exception as e:
         print(f"[plays] Real-Chrome fetch failed: {event_id}: {e}")
         return [], {}, {}, []
@@ -1808,6 +1811,36 @@ def _run_osascript(script: str, args: list[str] = None) -> str:
 # scores specifically are fetched via AppleScript against the real,
 # already-logged-in Chrome browser instead of Playwright. Schedule/roster
 # discovery elsewhere in this file is unaffected and stays on Playwright.
+#
+# SAFETY NET: that real Chrome session can itself log out of GameChanger
+# (session/token expiry over a long unattended run — nothing keeps it
+# alive between fetches since every fetch opens and closes a fresh tab).
+# When that happens GC serves a blurred "Sign in to GameChanger" teaser
+# page with a generic placeholder roster instead of real data, and if we
+# don't catch it, that fake roster gets parsed and saved to Supabase as if
+# it were real. GCSignedOutError + _looks_signed_out() below detect that
+# state at the source and hard-stop the run instead of silently writing
+# fabricated data.
+class GCSignedOutError(RuntimeError):
+    """Raised when the real Chrome browser is signed out of GameChanger
+    (saw a sign-in teaser page instead of real data)."""
+    pass
+
+
+_SIGNED_OUT_MARKERS = (
+    "sign in to gamechanger",
+    "log in to gamechanger",
+    "sign in & we land you",
+    "want live stats",
+    "download the app",
+)
+
+
+def _looks_signed_out(raw: str) -> bool:
+    low = (raw or "").lower()
+    return any(marker in low for marker in _SIGNED_OUT_MARKERS)
+
+
 _REAL_CHROME_JS_TEMPLATE = r'''
 tell application "Google Chrome"
     activate
@@ -1859,7 +1892,13 @@ def fetch_page_text_via_real_chrome(url: str, ready_js: str, timeout: int = 25) 
         "ready_js": ready_js.replace('"', '\\"'),
         "timeout": int(timeout),
     }
-    return _run_osascript(script)
+    raw = _run_osascript(script)
+    if _looks_signed_out(raw):
+        raise GCSignedOutError(
+            f"Real Chrome is signed out of GameChanger (got a 'Sign in to "
+            f"GameChanger' teaser instead of real data) while fetching: {url}"
+        )
+    return raw
 
 
 def _lines_from_text(raw: str) -> list[str]:
@@ -1879,6 +1918,9 @@ def _load_box_score_page(page: Page, team_id: str, team_slug: Optional[str],
     ready_js = "document.body.innerText.includes('LINEUP') || document.body.innerText.includes(\"doesn't exist\")"
     try:
         raw = fetch_page_text_via_real_chrome(url, ready_js, timeout=max(20, timeout // 1000))
+    except GCSignedOutError as e:
+        print(f"[boxscore] \U0001F6A8 SIGNED OUT — aborting, no data saved: {e}")
+        raise
     except Exception as e:
         print(f"[boxscore] Real-Chrome fetch failed for {event_id}: {e}")
         return []
@@ -2710,6 +2752,18 @@ def run(args):
             try:
                 summary = scrape_one_team(sb, page, gc_team_id, team_name, args)
                 summaries.append(summary)
+            except GCSignedOutError as e:
+                print(f"\n{'!' * 70}")
+                print(f"[ABORT] Real Chrome is signed out of GameChanger — stopping the run here.")
+                print(f"        {e}")
+                print(f"        No fabricated data was saved for '{team_name}' or any team after it.")
+                print(f"        Sign back in to GameChanger in that Chrome window and re-run to")
+                print(f"        pick up '{team_name}' and every remaining team (already-scraped")
+                print(f"        games are skipped automatically, so nothing is lost or duplicated).")
+                print(f"{'!' * 70}\n")
+                summaries.append({"team": team_name, "gc_id": gc_team_id,
+                                   "error": "signed out of GameChanger — run aborted, re-run after signing in"})
+                break
             except Exception as e:
                 print(f"[ERROR] {team_name} ({gc_team_id}): {e}")
                 summaries.append({"team": team_name, "gc_id": gc_team_id, "error": str(e)})
