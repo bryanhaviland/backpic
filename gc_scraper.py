@@ -1828,6 +1828,171 @@ def _run_osascript(script: str, args: list[str] = None) -> str:
     return proc.stdout
 
 
+# ---------------------------------------------------------------------------
+# Real-Chrome auto re-login — recover from a sign-out without stopping the run
+#
+# GC_EMAIL/GC_PASSWORD (and GMAIL_APP_PASSWORD, if GC challenges for a
+# one-time code) already live in .env for the Playwright-side login flow
+# (see login()/ensure_authenticated_state() above). This reuses the same
+# credentials to drive an equivalent login in the real, human Chrome browser
+# via AppleScript, instead of Playwright — that's the browser whose session
+# actually goes stale mid-run (see GCSignedOutError below).
+# ---------------------------------------------------------------------------
+
+def _rc_open_tab(url: str):
+    """Open `url` in a new Chrome tab and make it the active tab, so
+    subsequent _rc_exec() calls target it without needing to re-find it."""
+    script = '''
+tell application "Google Chrome"
+    activate
+    if (count of windows) is 0 then
+        make new window
+    end if
+    make new tab at end of tabs of window 1 with properties {URL:"%(url)s"}
+    set active tab index of window 1 to (count of tabs of window 1)
+end tell
+''' % {"url": url.replace('"', '\\"')}
+    _run_osascript(script)
+
+
+def _rc_exec(js: str) -> str:
+    """Execute `js` in the currently active tab of the frontmost Chrome
+    window and return its result (as a string)."""
+    script = '''
+tell application "Google Chrome"
+    set t to active tab of window 1
+    return execute t javascript "%(js)s"
+end tell
+''' % {"js": js.replace('"', '\\"')}
+    return _run_osascript(script)
+
+
+def _rc_close_active_tab():
+    try:
+        _run_osascript('tell application "Google Chrome" to close active tab of window 1')
+    except Exception:
+        pass
+
+
+def attempt_real_chrome_relogin() -> bool:
+    """
+    Try to sign the real Chrome browser back into GameChanger using
+    GC_EMAIL/GC_PASSWORD from the environment (falling back to
+    GMAIL_APP_PASSWORD to auto-fetch a one-time code if GC challenges for
+    one). Returns True once a session token is confirmed in localStorage;
+    False if credentials are missing or the flow doesn't complete.
+
+    Leaves the tab open on success (that's now the live signed-in session);
+    closes it on failure so it doesn't linger as a confusing half-logged-in
+    tab.
+    """
+    import json as _json
+
+    gc_email    = os.getenv("GC_EMAIL")
+    gc_password = os.getenv("GC_PASSWORD")
+    gmail_app_pw = os.getenv("GMAIL_APP_PASSWORD")
+
+    if not gc_email or not gc_password:
+        print("[relogin] GC_EMAIL/GC_PASSWORD not set in .env — can't auto re-login.")
+        return False
+
+    print("[relogin] Real Chrome is signed out of GameChanger — attempting auto re-login …")
+    try:
+        _rc_open_tab("https://web.gc.com/sign-in")
+        time.sleep(3)
+
+        # Step 1: email
+        email_js = '''(function(){
+            var el = document.querySelector("input[type='email'], input[name='email'], input[placeholder*='email' i]");
+            if (!el) return "no-field";
+            var d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+            d.set.call(el, %(email)s);
+            el.dispatchEvent(new Event("input", {bubbles:true}));
+            el.dispatchEvent(new Event("change", {bubbles:true}));
+            var btn = Array.from(document.querySelectorAll("button")).find(function(b){return /sign in|log in|continue|next|send/i.test(b.innerText);});
+            if (btn) { btn.click(); return "submitted"; }
+            return "filled-no-button";
+        })()''' % {"email": _json.dumps(gc_email)}
+        r1 = _rc_exec(email_js)
+        if "no-field" in r1:
+            print(f"[relogin] No email field found on sign-in page — aborting relogin. (raw: {r1.strip()!r})")
+            _rc_close_active_tab()
+            return False
+        time.sleep(3)
+
+        # Step 2: password, if a password field appeared
+        pw_js = '''(function(){
+            var el = document.querySelector("input[type='password']");
+            if (!el) return "no-field";
+            var d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+            d.set.call(el, %(pw)s);
+            el.dispatchEvent(new Event("input", {bubbles:true}));
+            el.dispatchEvent(new Event("change", {bubbles:true}));
+            var btn = Array.from(document.querySelectorAll("button")).find(function(b){return /sign in|log in|continue/i.test(b.innerText);});
+            if (btn) { btn.click(); return "submitted"; }
+            return "filled-no-button";
+        })()''' % {"pw": _json.dumps(gc_password)}
+        r2 = _rc_exec(pw_js)
+        if "no-field" not in r2:
+            time.sleep(3)
+
+        # Step 3: one-time code, if GC is challenging for one
+        has_code_field = _rc_exec(
+            "!!document.querySelector(\\\"input[placeholder*='code' i], input[name*='code' i], "
+            "input[name*='otp' i], input[type='number'], input[inputmode='numeric'], input[maxlength='1']\\\")"
+        )
+        if "true" in has_code_field.lower():
+            print("[relogin] GC is asking for a one-time code …")
+            code = None
+            if gmail_app_pw:
+                code = fetch_gc_otp_from_gmail(gc_email, gmail_app_pw)
+            if not code:
+                print("[relogin] Couldn't fetch a one-time code (no GMAIL_APP_PASSWORD, or "
+                      "nothing arrived) — can't finish auto re-login.")
+                _rc_close_active_tab()
+                return False
+            code_js = '''(function(){
+                var single = document.querySelector("input[placeholder*='code' i], input[name*='code' i], input[name*='otp' i], input[type='number'], input[inputmode='numeric']");
+                var d = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+                if (single) {
+                    d.set.call(single, %(code)s);
+                    single.dispatchEvent(new Event("input", {bubbles:true}));
+                    single.dispatchEvent(new Event("change", {bubbles:true}));
+                } else {
+                    var boxes = Array.from(document.querySelectorAll("input[maxlength='1']"));
+                    var code = %(code)s;
+                    for (var i = 0; i < boxes.length && i < code.length; i++) {
+                        d.set.call(boxes[i], code[i]);
+                        boxes[i].dispatchEvent(new Event("input", {bubbles:true}));
+                        boxes[i].dispatchEvent(new Event("change", {bubbles:true}));
+                    }
+                }
+                var btn = Array.from(document.querySelectorAll("button")).find(function(b){return /verify|continue|confirm|sign in/i.test(b.innerText);});
+                if (btn) btn.click();
+                return "submitted-code";
+            })()''' % {"code": _json.dumps(code)}
+            _rc_exec(code_js)
+            time.sleep(3)
+
+        # Step 4: verify we actually landed a session token
+        token_check = _rc_exec("!!localStorage.getItem('eden-auth-tokens')")
+        signed_in = "true" in token_check.lower()
+        if signed_in:
+            print("[relogin] ✓ Real Chrome re-authenticated to GameChanger.")
+        else:
+            print(f"[relogin] ✗ Re-login did not produce a session token (raw check: {token_check.strip()!r}).")
+            _rc_close_active_tab()
+        return signed_in
+
+    except Exception as e:
+        print(f"[relogin] Error during auto re-login: {e}")
+        try:
+            _rc_close_active_tab()
+        except Exception:
+            pass
+        return False
+
+
 # GameChanger silently serves DIFFERENT (wrong) box-score data — a decoy
 # roster, not an error or a login wall — to Playwright/CDP-controlled
 # browsers, authenticated or not. Confirmed by fetching the identical
@@ -1911,13 +2076,21 @@ end tell
 '''
 
 
-def fetch_page_text_via_real_chrome(url: str, ready_js: str, timeout: int = 25) -> str:
+def fetch_page_text_via_real_chrome(url: str, ready_js: str, timeout: int = 25,
+                                     _retry: bool = True) -> str:
     """
     Open `url` in a new tab of the user's actual, already-authenticated
     Chrome (via AppleScript — no CDP/automation protocol involved) and
     return document.body.innerText once `ready_js` evaluates truthy or the
     timeout elapses. Requires Chrome's "View > Developer > Allow JavaScript
     from Apple Events" to be turned on.
+
+    If Chrome turns out to be signed out of GameChanger, this makes ONE
+    attempt to auto re-login (see attempt_real_chrome_relogin) and, if that
+    succeeds, retries this exact fetch once before giving up. `_retry` is
+    internal — it's how that single retry is capped so a persistent problem
+    (bad credentials, an OTP we can't clear) still surfaces as
+    GCSignedOutError instead of looping.
     """
     script = _REAL_CHROME_JS_TEMPLATE % {
         "url": url.replace('"', '\\"'),
@@ -1926,6 +2099,9 @@ def fetch_page_text_via_real_chrome(url: str, ready_js: str, timeout: int = 25) 
     }
     raw = _run_osascript(script)
     if _looks_signed_out(raw):
+        if _retry and attempt_real_chrome_relogin():
+            print(f"[relogin] Retrying fetch: {url}")
+            return fetch_page_text_via_real_chrome(url, ready_js, timeout=timeout, _retry=False)
         raise GCSignedOutError(
             f"Real Chrome is signed out of GameChanger (got a 'Sign in to "
             f"GameChanger' teaser instead of real data) while fetching: {url}"
