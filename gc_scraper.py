@@ -1873,6 +1873,11 @@ tell application "Google Chrome"
     end repeat
     delay 1
     set pageText to execute newTab javascript "document.body.innerText"
+    -- Pause before closing so any in-flight auth token refresh (fired on
+    -- page load) has time to finish and persist before the tab is torn
+    -- down — closing too fast may be killing refreshes mid-flight and
+    -- burning the (rotating) refresh token without ever saving the new one.
+    delay 5
     close newTab
     return pageText
 end tell
