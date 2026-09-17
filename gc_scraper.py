@@ -1898,10 +1898,16 @@ def attempt_real_chrome_relogin() -> bool:
 
     print("[relogin] Real Chrome is signed out of GameChanger — attempting auto re-login …")
     try:
-        _rc_open_tab("https://web.gc.com/sign-in")
+        # https://web.gc.com/sign-in is not a real server route (hard nav to it
+        # 404s — it's client-side-router-only) — the actual signed-out landing
+        # page is the root URL, which renders the sign-in form directly. Mirror
+        # the working Playwright login() fallback pattern: try the root first,
+        # and if no email field shows up (e.g. GC served a marketing landing
+        # instead), look for a "Sign In" link/button and click it before
+        # giving up.
+        _rc_open_tab("https://web.gc.com/")
         time.sleep(3)
 
-        # Step 1: email
         email_js = '''(function(){
             var el = document.querySelector("input[type='email'], input[name='email'], input[placeholder*='email' i]");
             if (!el) return "no-field";
@@ -1914,6 +1920,17 @@ def attempt_real_chrome_relogin() -> bool:
             return "filled-no-button";
         })()''' % {"email": _json.dumps(gc_email)}
         r1 = _rc_exec(email_js)
+        if "no-field" in r1:
+            print("[relogin] No email field on landing page — looking for a Sign In link …")
+            click_signin_js = '''(function(){
+                var el = Array.from(document.querySelectorAll("a,button")).find(function(b){return /sign in|log in/i.test(b.innerText);});
+                if (el) { el.click(); return "clicked"; }
+                return "not-found";
+            })()'''
+            r1b = _rc_exec(click_signin_js)
+            if "clicked" in r1b:
+                time.sleep(3)
+                r1 = _rc_exec(email_js)
         if "no-field" in r1:
             print(f"[relogin] No email field found on sign-in page — aborting relogin. (raw: {r1.strip()!r})")
             _rc_close_active_tab()
