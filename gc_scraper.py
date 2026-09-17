@@ -2942,14 +2942,27 @@ def run(args):
 
         # Resolve team IDs
         if args.all_teams:
-            # Pull every team from the database
-            rows = sb.select("teams", {}, columns="gc_team_id,name")
+            # Pull every team from the database, then restrict to teams that
+            # actually have this season's games on record — otherwise every
+            # off-season team (Spring/Summer rosters with nothing new to
+            # fetch) gets opened and checked on every run for nothing.
+            season_filter = args.season or "Fall 2026"
+            sr = requests.get(f"{sb.base}/games", headers=sb.headers,
+                               params={"select": "team_id", "season": f"eq.{season_filter}"})
+            sr.raise_for_status()
+            active_team_ids = {row["team_id"] for row in sr.json()}
+
+            rows = sb.select("teams", {}, columns="id,gc_team_id,name")
             if not rows:
                 print("ERROR: --all-teams specified but no teams found in the database.")
                 browser.close()
                 return
-            team_list = [(r["gc_team_id"], r["name"]) for r in rows]
-            print(f"[db] Loaded {len(team_list)} teams from Supabase")
+            filtered = [r for r in rows if r["id"] in active_team_ids]
+            skipped = len(rows) - len(filtered)
+            if skipped:
+                print(f"[db] Skipping {skipped} team(s) with no {season_filter} games on record")
+            team_list = [(r["gc_team_id"], r["name"]) for r in filtered]
+            print(f"[db] Loaded {len(team_list)} {season_filter} team(s) from Supabase")
         elif args.team_ids:
             # IDs provided directly — pair with names (or use ID as label if name missing)
             for i, tid in enumerate(args.team_ids):
