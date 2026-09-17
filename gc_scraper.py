@@ -148,29 +148,44 @@ def _fuzzy_norm(name: str) -> str:
     n = _TEAM_NOISE.sub(" ", n)
     return re.sub(r"\s+", " ", n).strip()
 
+def _match_score(scouted_name: str, gc_section_name: str) -> float:
+    """
+    Score how well gc_section_name (a box-score section header) matches
+    scouted_name (our team's DB name), 0.0-1.0+. Used to pick the BEST
+    match among a box score's sections rather than the first/last one that
+    merely clears a threshold — see _team_matches for why that matters.
+    """
+    sl = scouted_name.lower()
+    gl = gc_section_name.lower()
+    if sl == gl:
+        return 1.0
+    if sl in gl or gl in sl:
+        # A pure substring match still needs to be RANKED, not just accepted:
+        # "Jax Fusion" is a substring of both "Jax Fusion 12U" and "Jax Fusion
+        # Ford 12U" (a sibling club team), so score by how much of the longer
+        # string the shorter one actually covers — the tighter match wins.
+        shorter, longer = sorted((len(sl), len(gl)))
+        return 0.9 * (shorter / longer)
+    sn = _fuzzy_norm(scouted_name)
+    gn = _fuzzy_norm(gc_section_name)
+    if not sn or not gn:
+        return 0.0
+    base  = difflib.SequenceMatcher(None, sn, gn).ratio()
+    bonus = 0.10 if (sn in gn or gn in sn) else 0.0
+    return min(1.0, base + bonus)
+
+
 def _team_matches(scouted_name: str, gc_section_name: str,
                   threshold: float = 0.68) -> bool:
     """
     Return True if scouted_name refers to the same team as gc_section_name.
-    Fast-path: substring check (original behaviour, zero cost).
-    Fallback: fuzzy match via difflib.SequenceMatcher.
 
-    Examples that now work:
+    Examples that work via _match_score's fuzzy fallback:
       "CF Flamingos"           <-> "Central Florida Flamingos 10U"
       "LadyHawks Garcia"       <-> "10U LadyHawks-Garcia 10U"
       "St Pete Scorchers Wilson" <-> "St Pete Scorchers Wilson 10U"
     """
-    sl = scouted_name.lower()
-    gl = gc_section_name.lower()
-    if sl in gl or gl in sl:
-        return True
-    sn = _fuzzy_norm(scouted_name)
-    gn = _fuzzy_norm(gc_section_name)
-    if not sn or not gn:
-        return False
-    base  = difflib.SequenceMatcher(None, sn, gn).ratio()
-    bonus = 0.10 if (sn in gn or gn in sn) else 0.0
-    score = min(1.0, base + bonus)
+    score = _match_score(scouted_name, gc_section_name)
     if score >= threshold:
         print(f"[boxscore] fuzzy \'{scouted_name}\' <-> \'{gc_section_name}\' score={score:.2f} matched")
         return True
@@ -2251,7 +2266,7 @@ def parse_full_box_score(lines: list[str], scouted_name: str) -> dict:
             print(f"           '{ln}'")
         return {}
 
-    result = {}
+    sections_data = []  # [(team_name, batting, pitching, catchers, extras_bat, extras_pit), ...]
     for sec_idx, (lineup_idx, team_name) in enumerate(team_sections):
         # Determine section boundaries
         next_lineup = team_sections[sec_idx + 1][0] if sec_idx + 1 < len(team_sections) else len(lines)
@@ -2269,8 +2284,22 @@ def parse_full_box_score(lines: list[str], scouted_name: str) -> dict:
         pitchers = _parse_pitching_section(pit_lines)
         extras_bat = _parse_extras(bat_lines)
         extras_pit = _parse_extras(pit_lines)
+        sections_data.append((team_name, players, pitchers, catchers, extras_bat, extras_pit))
 
-        key = 'scouted' if _team_matches(scouted_name, team_name) else 'opponent'
+    # Pick whichever section is the SINGLE BEST match for our team — not just
+    # any section that clears the threshold. Two sibling teams from the same
+    # club (e.g. "Jax Fusion 12U" and the opponent "Jax Fusion Ford 12U") can
+    # both pass _team_matches, and previously whichever one was processed
+    # LAST simply overwrote result['scouted'], silently merging the
+    # opponent's roster into our own team's stats and dropping our real
+    # box score for that game entirely.
+    scores = [_match_score(scouted_name, name) for name, *_ in sections_data]
+    best_idx = max(range(len(scores)), key=lambda i: scores[i]) if scores else -1
+    scouted_idx = best_idx if best_idx >= 0 and scores[best_idx] >= 0.68 else -1
+
+    result = {}
+    for i, (team_name, players, pitchers, catchers, extras_bat, extras_pit) in enumerate(sections_data):
+        key = 'scouted' if i == scouted_idx else 'opponent'
         print(f"[boxscore] section '{team_name[:40]}' → '{key}' "
               f"({len(players)} batters, {len(pitchers)} pitchers)")
         result[key] = {
@@ -2284,7 +2313,7 @@ def parse_full_box_score(lines: list[str], scouted_name: str) -> dict:
 
     if 'scouted' not in result:
         print(f"[boxscore] ✗ scouted_name='{scouted_name}' did not match any section. "
-              f"Sections: {[s[1] for s in team_sections]}")
+              f"Sections: {[s[0] for s in sections_data]}")
 
     return result
 
