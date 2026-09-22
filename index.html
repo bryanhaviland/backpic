@@ -1775,6 +1775,9 @@ function renderHomeRankingRows() {
          <button onclick="openMyTeamModal()">Select Your Team</button>
        </div>`;
 
+  const sosValues = _homeRankedData.filter(r => r.hasSos).map(r => r.sos);
+  const avgSos = sosValues.length ? sosValues.reduce((a, b) => a + b, 0) / sosValues.length : null;
+
   const rowsHTML = sorted.map((r, i) => {
     const isMine = String(r.id) === myTeamId;
     const record = `${r.wins}-${r.losses}${r.ties > 0 ? '-' + r.ties : ''}`;
@@ -1785,7 +1788,7 @@ function renderHomeRankingRows() {
       <div class="rank-name">${isMine ? '⭐ ' : ''}${escHtml(r.name)}</div>
       <div class="rank-record">${record}</div>
       <div class="rank-pct">${(r.winPct * 100).toFixed(0)}%</div>
-      <div class="rank-sos" title="${r.hasSos ? r.knownGames + ' game(s) vs. known teams' : 'No games yet vs. teams we track'}">${r.hasSos ? fmtSos(r.sos) : '—'}</div>
+      <div class="rank-sos" style="${sosColorStyle(r, avgSos)}" title="${r.hasSos ? r.knownGames + ' game(s) vs. known teams' : 'No games yet vs. teams we track'}">${r.hasSos ? fmtSos(r.sos) : '—'}</div>
     </div>`;
   }).join('');
 
@@ -1820,6 +1823,15 @@ function escHtml(s) {
 // zero dropped) rather than a percent, so SoS is never mistaken for Win %.
 function fmtSos(v) {
   return (v * 10).toFixed(1);
+}
+// Red = tougher-than-average schedule (wins came against good teams),
+// Green = easier-than-average schedule. Neutral gray when there's no
+// average to compare against yet.
+function sosColorStyle(r, avgSos) {
+  if (!r.hasSos || avgSos == null) return '';
+  const diff = r.sos - avgSos;
+  if (Math.abs(diff) < 0.01) return '';
+  return diff > 0 ? 'color:#f85149' : 'color:#3fb950';
 }
 function escAttr(s) {
   return String(s).replace(/"/g,'&quot;');
