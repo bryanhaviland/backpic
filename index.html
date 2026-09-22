@@ -259,6 +259,9 @@
     border-radius: 5px; font-size: 0.82rem;
   }
   .rank-row.my-team { border-color: #e8b55a; background: rgba(232,181,90,0.12); }
+  .rank-row-clickable { cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+  .rank-row-clickable:hover { background: #1c2128; border-color: #3a4048; }
+  .rank-row-clickable.my-team:hover { background: rgba(232,181,90,0.2); }
   .rank-pos { width: 26px; text-align: center; font-weight: 800; color: #8b949e; flex-shrink: 0; }
   .rank-row.my-team .rank-pos { color: #e8b55a; }
   .rank-name { flex: 1; font-weight: 600; color: #e6edf3; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1775,7 +1778,9 @@ function renderHomeRankingRows() {
   const rowsHTML = sorted.map((r, i) => {
     const isMine = String(r.id) === myTeamId;
     const record = `${r.wins}-${r.losses}${r.ties > 0 ? '-' + r.ties : ''}`;
-    return `<div class="rank-row${isMine ? ' my-team' : ''}">
+    return `<div class="rank-row rank-row-clickable${isMine ? ' my-team' : ''}"
+           onclick="selectTeamFromModal('${escAttr(String(r.id))}','${escAttr(String(r.name))}')"
+           title="View ${escAttr(String(r.name))}'s team page">
       <div class="rank-pos">${i + 1}</div>
       <div class="rank-name">${isMine ? '⭐ ' : ''}${escHtml(r.name)}</div>
       <div class="rank-record">${record}</div>
