@@ -231,6 +231,33 @@
   }
   .team-row-item:hover { background: #e8b55a; color: #000; font-weight: 600; }
   .team-row-item.hidden { display: none; }
+  .team-row-item.my-team-row { color: #e8b55a; font-weight: 700; }
+  .team-row-item.my-team-row::after { content: " ⭐"; }
+
+  /* ── HOME LANDING — RANKINGS ── */
+  .rank-table { display: flex; flex-direction: column; gap: 3px; }
+  .rank-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; background: #161b22; border: 1px solid #21262d;
+    border-radius: 5px; font-size: 0.82rem;
+  }
+  .rank-row.my-team { border-color: #e8b55a; background: rgba(232,181,90,0.12); }
+  .rank-pos { width: 26px; text-align: center; font-weight: 800; color: #8b949e; flex-shrink: 0; }
+  .rank-row.my-team .rank-pos { color: #e8b55a; }
+  .rank-name { flex: 1; font-weight: 600; color: #e6edf3; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank-row.my-team .rank-name { color: #e8b55a; font-weight: 800; }
+  .rank-record { color: #8b949e; font-size: 0.78rem; white-space: nowrap; width: 64px; text-align:right; }
+  .rank-pct { font-weight: 700; white-space: nowrap; width: 52px; text-align: right; }
+  .rank-adj { font-weight: 700; white-space: nowrap; width: 52px; text-align: right; color: #8b949e; }
+  .my-team-banner {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px; background: rgba(232,181,90,0.1); border: 1px solid #e8b55a;
+    border-radius: 6px; margin-bottom: 14px; font-size: 0.85rem;
+  }
+  .my-team-banner button {
+    background: #e8b55a; color: #000; border: none; border-radius: 6px;
+    padding: 6px 12px; font-weight: 700; font-size: 0.78rem; cursor: pointer; white-space: nowrap;
+  }
   .modal-footer {
     display: flex;
     gap: 10px;
@@ -1003,6 +1030,12 @@
   cursor: pointer; transition: all 0.15s;
 }
 #userBadge .admin-btn:hover { border-color: #e8b55a; background: rgba(232,181,90,0.08); }
+#userBadge .myteam-btn {
+  background: none; border: 1px solid #30363d; color: #e8b55a;
+  border-radius: 6px; padding: 3px 8px; font-size: 0.72rem;
+  cursor: pointer; transition: all 0.15s;
+}
+#userBadge .myteam-btn:hover { border-color: #e8b55a; background: rgba(232,181,90,0.08); }
 
 /* Admin scrape modal */
 #adminModal {
@@ -1136,6 +1169,7 @@
   <!-- User badge row -->
   <div id="userBadge" style="display:none;justify-content:flex-end;padding:4px 12px 6px">
     <span class="user-email" id="userEmail"></span>
+    <button id="myTeamBtn" class="myteam-btn" onclick="openMyTeamModal()">⭐ My Team</button>
     <button id="adminPanelBtn" class="admin-btn" onclick="openAdminModal()" style="display:none">⚙ Admin</button>
     <button class="logout-btn" onclick="doLogout()">Sign Out</button>
   </div>
@@ -1163,6 +1197,23 @@
     <div class="modal-body">
       <input class="modal-search" id="teamModalSearch" placeholder="🔍 Search teams…" oninput="filterTeamModal(this.value)">
       <div class="checkbox-list" id="teamModalList" style="gap:4px">
+        <div style="color:#8b949e;font-size:0.85rem">Loading teams…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════ MY TEAM MODAL -->
+<div class="modal-overlay" id="myTeamModal" style="display:none" onclick="if(event.target===this)closeMyTeamModal()">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title">⭐ Select <span style="color:#e8b55a">Your Team</span></div>
+      <button class="modal-close" onclick="closeMyTeamModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="color:#8b949e;font-size:0.8rem;margin-bottom:10px">Your team is highlighted throughout the app and on the Home rankings page.</div>
+      <input class="modal-search" id="myTeamModalSearch" placeholder="🔍 Search teams…" oninput="filterMyTeamModal(this.value)">
+      <div class="checkbox-list" id="myTeamModalList" style="gap:4px">
         <div style="color:#8b949e;font-size:0.85rem">Loading teams…</div>
       </div>
     </div>
@@ -1307,7 +1358,8 @@
 <!-- ══════════════════════════════════════════════════════ TABS -->
 <div class="tab-bar">
   <div class="tab-row">
-    <button class="tab-btn active" data-tab="overview" onclick="switchTab(this,'overview')">🏠 Overview</button>
+    <button class="tab-btn active" data-tab="home" onclick="switchTab(this,'home')">🏠 Home</button>
+    <button class="tab-btn" data-tab="overview" onclick="switchTab(this,'overview')">📊 Overview</button>
     <button class="notes-btn" onclick="openNotesModal()" title="Team & player scout notes">📝 Notes</button>
   </div>
   <div class="tab-row">
@@ -1324,7 +1376,10 @@
 </div>
 
 <!-- ══════════════════════════════════════════════════════ PANELS -->
-<div id="tab-overview" class="tab-panel active">
+<div id="tab-home" class="tab-panel active">
+  <div class="empty-state"><div class="spinner"></div> Loading rankings…</div>
+</div>
+<div id="tab-overview" class="tab-panel">
   <div class="empty-state"><span id="emptyIcon">🥎</span> Select a team above and click <strong style="color:#e8b55a;margin:0 4px">SCOUT</strong> to generate the report</div>
 </div>
 <div id="tab-batting"  class="tab-panel"><div class="empty-state">Select a team first</div></div>
@@ -1508,22 +1563,121 @@ function populateDropdown(sel, teams) {
   sel.innerHTML = '<option value="">—</option>' +
     teams.map(t => `<option value="${escAttr(String(t.id))}">${escHtml(String(t.name))}</option>`).join('');
 
-  // Populate the Scout a Team modal list
+  // Keep tournament + guest modals in sync with the current sport filter
+  allTeamsForModal = teams.map(t => ({ id: String(t.id), name: String(t.name), sport: String(t.sport || '') }));
+
+  // Populate the Scout a Team modal list (highlights "My Team" if set)
+  renderTeamModalList(allTeamsForModal);
+
+  // Home landing page — team rankings by win% + strength-of-schedule adjustment
+  renderHomeLanding();
+}
+
+function renderTeamModalList(teams) {
   const list = document.getElementById('teamModalList');
   if (list) {
     list.innerHTML = teams.map(t => `
-      <div class="team-row-item" data-id="${escAttr(String(t.id))}" data-name="${escAttr(String(t.name))}"
+      <div class="team-row-item${String(t.id) === myTeamId ? ' my-team-row' : ''}" data-id="${escAttr(String(t.id))}" data-name="${escAttr(String(t.name))}"
            onclick="selectTeamFromModal('${escAttr(String(t.id))}','${escAttr(String(t.name))}')">
         ${escHtml(String(t.name))}
       </div>`).join('');
   }
+}
 
-  // Keep tournament + guest modals in sync with the current sport filter
-  allTeamsForModal = teams.map(t => ({ id: String(t.id), name: String(t.name), sport: String(t.sport || '') }));
+// ════════════════════════════════════════════════════════════════════════════
+//  HOME LANDING — team rankings by win% + strength-of-schedule adjustment
+// ════════════════════════════════════════════════════════════════════════════
+async function renderHomeLanding() {
+  const homeEl = document.getElementById('tab-home');
+  if (!homeEl) return;
+  homeEl.innerHTML = `<div class="empty-state"><div class="spinner"></div> Loading rankings…</div>`;
 
-  const emoji = currentSport === 'softball' ? '🥎' : '⚾';
-  document.getElementById('tab-overview').innerHTML =
-    `<div class="empty-state">${emoji} Click <strong style="color:#e8b55a;margin:0 4px">🎯 Scout a Team</strong> to generate a report</div>`;
+  let rows = [];
+  try {
+    rows = await sql(`
+      WITH played AS (
+        SELECT g.team_id, g.opponent
+        FROM games g
+        JOIN teams t ON t.id = g.team_id
+        WHERE LOWER(t.sport) = LOWER('${currentSport}')
+          AND g.season = '${currentSeason}'
+          AND g.runs_scored IS NOT NULL AND g.runs_allowed IS NOT NULL
+          AND NOT (g.runs_scored = 0 AND g.runs_allowed = 0)
+      ),
+      opp_wp AS (
+        SELECT t.name AS team_name, tsr.win_pct
+        FROM teams t
+        JOIN team_season_records tsr ON tsr.team_id = t.id AND tsr.season = '${currentSeason}'
+      ),
+      sos AS (
+        SELECT p.team_id, AVG(COALESCE(o.win_pct, 0.5)) AS sos
+        FROM played p
+        LEFT JOIN opp_wp o ON o.team_name = p.opponent
+        GROUP BY p.team_id
+      )
+      SELECT t.id, t.name, tsr.games, tsr.wins, tsr.losses, tsr.ties, tsr.win_pct, s.sos
+      FROM team_season_records tsr
+      JOIN teams t ON t.id = tsr.team_id
+      LEFT JOIN sos s ON s.team_id = tsr.team_id
+      WHERE tsr.season = '${currentSeason}' AND LOWER(t.sport) = LOWER('${currentSport}') AND tsr.games > 0
+      ORDER BY tsr.win_pct DESC NULLS LAST, tsr.games DESC
+    `);
+  } catch (e) {
+    console.error('renderHomeLanding error:', e);
+    homeEl.innerHTML = `<div class="empty-state" style="color:#f87171">Error loading rankings: ${escHtml(e.message)}</div>`;
+    return;
+  }
+
+  if (!rows.length) {
+    homeEl.innerHTML = `<div class="empty-state">No games recorded yet for ${escHtml(currentSeason)}</div>`;
+    return;
+  }
+
+  const winPcts   = rows.map(r => parseFloat(r.win_pct) || 0);
+  const leagueAvg = winPcts.reduce((a, b) => a + b, 0) / winPcts.length;
+
+  // Adjusted win% = raw win% shifted by how much tougher/easier this team's
+  // schedule was than the league average (opponents' average win%, per game played).
+  const ranked = rows.map(r => {
+    const winPct = parseFloat(r.win_pct) || 0;
+    const sos    = r.sos != null ? parseFloat(r.sos) : leagueAvg;
+    const adj    = Math.max(0, Math.min(1, winPct + (sos - leagueAvg)));
+    return Object.assign({}, r, { winPct, sos, adj });
+  });
+
+  const banner = myTeamId
+    ? ''
+    : `<div class="my-team-banner">
+         <span>⭐ Set <strong>Your Team</strong> to highlight it in the rankings and team lists.</span>
+         <button onclick="openMyTeamModal()">Select Your Team</button>
+       </div>`;
+
+  const rowsHTML = ranked.map((r, i) => {
+    const isMine = String(r.id) === myTeamId;
+    const record = `${r.wins}-${r.losses}${r.ties > 0 ? '-' + r.ties : ''}`;
+    return `<div class="rank-row${isMine ? ' my-team' : ''}">
+      <div class="rank-pos">${i + 1}</div>
+      <div class="rank-name">${isMine ? '⭐ ' : ''}${escHtml(r.name)}</div>
+      <div class="rank-record">${record}</div>
+      <div class="rank-pct">${(r.winPct * 100).toFixed(0)}%</div>
+      <div class="rank-adj">${(r.adj * 100).toFixed(0)}%</div>
+    </div>`;
+  }).join('');
+
+  homeEl.innerHTML = `
+    <div style="max-width:900px;margin:0 auto">
+      <div style="color:#e8b55a;font-size:1.15rem;font-weight:800;margin-bottom:16px">🏠 ${escHtml(currentSeason)} Rankings</div>
+      ${banner}
+      <div class="rank-row" style="background:transparent;border:none;color:#8b949e;font-size:0.68rem;text-transform:uppercase;letter-spacing:1px;font-weight:700">
+        <div class="rank-pos">#</div>
+        <div class="rank-name">Team</div>
+        <div class="rank-record">Record</div>
+        <div class="rank-pct">Win %</div>
+        <div class="rank-adj">Adj %</div>
+      </div>
+      <div class="rank-table">${rowsHTML}</div>
+      <div style="color:#6e7681;font-size:0.7rem;margin-top:10px">Adj % blends win% with strength of schedule (average opponent win%). Games with no score posted are excluded from every calculation.</div>
+    </div>`;
 }
 
 function escHtml(s) {
@@ -1579,6 +1733,7 @@ function switchTab(btn, name) {
 // ════════════════════════════════════════════════════════════════════════════
 //  LOAD TEAM — fires all queries
 // ════════════════════════════════════════════════════════════════════════════
+let myTeamId = null; // profiles.team_id for the signed-in user, as a string ("" / null = not set)
 let teamId, teamName;
 let _bpBatting = [];  // batting_stats rows for current team — used by spray chart
 let _teamBadges = null; // computed once per team load: player_name -> badge[]
@@ -2626,7 +2781,59 @@ function selectTeamFromModal(id, name) {
   let opt = sel.querySelector(`option[value="${id}"]`);
   if (!opt) { opt = new Option(name, id); sel.appendChild(opt); }
   sel.value = id;
+  // Jump from Home to the Overview tab so the scouted report is visible
+  const overviewBtn = document.querySelector('.tab-btn[data-tab="overview"]');
+  if (overviewBtn) switchTab(overviewBtn, 'overview');
   loadTeam();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  MY TEAM MODAL — pick the team to highlight throughout the app
+// ════════════════════════════════════════════════════════════════════════════
+function openMyTeamModal() {
+  document.getElementById('myTeamModalSearch').value = '';
+  renderMyTeamModalList();
+  document.getElementById('myTeamModal').style.display = 'flex';
+  setTimeout(() => document.getElementById('myTeamModalSearch').focus(), 80);
+}
+
+function closeMyTeamModal() {
+  document.getElementById('myTeamModal').style.display = 'none';
+}
+
+function filterMyTeamModal(q) {
+  const lq = q.toLowerCase();
+  document.querySelectorAll('#myTeamModalList .team-row-item').forEach(el => {
+    el.classList.toggle('hidden', !(!lq || el.dataset.name.toLowerCase().includes(lq)));
+  });
+}
+
+function renderMyTeamModalList() {
+  const list = document.getElementById('myTeamModalList');
+  if (!list) return;
+  list.innerHTML = allTeamsForModal.map(t => `
+    <div class="team-row-item${String(t.id) === myTeamId ? ' my-team-row' : ''}" data-id="${escAttr(String(t.id))}" data-name="${escAttr(String(t.name))}"
+         onclick="selectMyTeam('${escAttr(String(t.id))}','${escAttr(String(t.name))}')">
+      ${escHtml(String(t.name))}${String(t.id) === myTeamId ? ' <span style="color:#e8b55a">(current)</span>' : ''}
+    </div>`).join('');
+}
+
+async function selectMyTeam(id, name) {
+  const { data: { session } } = await _sbClient.auth.getSession();
+  if (!session) return;
+  try {
+    const { error } = await _sbClient
+      .from('profiles')
+      .update({ team_id: id })
+      .eq('id', session.user.id);
+    if (error) { alert('Could not save your team: ' + error.message); return; }
+    myTeamId = String(id);
+    closeMyTeamModal();
+    renderTeamModalList(allTeamsForModal);
+    renderHomeLanding();
+  } catch (e) {
+    alert('Could not save your team: ' + e.message);
+  }
 }
 
 // Update the "Scout a Team" button label once a team is loaded
@@ -3671,7 +3878,7 @@ function showAuthScreen() {
   document.getElementById('appScreen').style.display  = 'none';
 }
 
-function authReady(session) {
+async function authReady(session) {
   // Show app, hide auth screen
   document.getElementById('authScreen').style.display = 'none';
   document.getElementById('appScreen').style.display  = 'block';
@@ -3687,8 +3894,28 @@ function authReady(session) {
     document.getElementById('adminPanelBtn').style.display = 'inline-block';
   }
 
+  // Load "my team" from the profile first so Home + highlighting are correct on first paint
+  await loadMyProfile(session);
+
   // Boot the main app
   bootInit();
+}
+
+async function loadMyProfile(session) {
+  try {
+    const { data, error } = await _sbClient
+      .from('profiles')
+      .select('team_id')
+      .eq('id', session.user.id)
+      .single();
+    if (!error && data && data.team_id != null) {
+      myTeamId = String(data.team_id);
+    } else {
+      myTeamId = null;
+    }
+  } catch (e) {
+    console.error('loadMyProfile error:', e);
+  }
 }
 
 async function doLogin() {
