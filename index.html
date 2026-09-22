@@ -65,6 +65,23 @@
     justify-content: center;
     gap: 10px;
   }
+  .home-fab {
+    position: fixed;
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    background: #e8b55a; color: #000;
+    border: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.35rem;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+    cursor: pointer;
+    z-index: 500;
+    transition: transform 0.1s;
+  }
+  .home-fab:hover { transform: scale(1.06); }
+  .home-fab:active { transform: scale(0.96); }
   .header-logo {
     font-size: 1.3rem;
     font-weight: 800;
@@ -1140,6 +1157,8 @@
 <!-- ══════════════════════════════════════════════════════ APP (hidden until auth) -->
 <div id="appScreen" style="display:none">
 
+<button class="home-fab" onclick="goHome()" title="Back to Home" aria-label="Back to Home">🏠</button>
+
 <!-- ══════════════════════════════════════════════════════ HEADER -->
 <div class="header">
   <!-- Row 1: logo -->
@@ -1737,6 +1756,13 @@ function switchTab(btn, name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('tab-' + name).classList.add('active');
+}
+
+// Floating 🏠 button — jump back to the Home rankings tab from anywhere, any scroll position
+function goHome() {
+  const homeBtn = document.querySelector('.tab-btn[data-tab="home"]');
+  if (homeBtn) switchTab(homeBtn, 'home');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
