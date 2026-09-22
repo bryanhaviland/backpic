@@ -248,7 +248,7 @@
   .rank-row.my-team .rank-name { color: #e8b55a; font-weight: 800; }
   .rank-record { color: #8b949e; font-size: 0.78rem; white-space: nowrap; width: 64px; text-align:right; }
   .rank-pct { font-weight: 700; white-space: nowrap; width: 52px; text-align: right; }
-  .rank-adj { font-weight: 700; white-space: nowrap; width: 52px; text-align: right; color: #8b949e; }
+  .rank-sos { font-weight: 700; white-space: nowrap; width: 52px; text-align: right; color: #8b949e; }
   .my-team-banner {
     display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
     padding: 10px 14px; background: rgba(232,181,90,0.1); border: 1px solid #e8b55a;
@@ -1609,13 +1609,18 @@ async function renderHomeLanding() {
         FROM teams t
         JOIN team_season_records tsr ON tsr.team_id = t.id AND tsr.season = '${currentSeason}'
       ),
+      -- Only opponents we actually track (have their own team_season_records
+      -- row) count toward strength of schedule. Games against unknown
+      -- opponents still count toward the team's own win%, but are simply
+      -- left out of the SoS average — they never get treated as a 0.500 win.
       sos AS (
-        SELECT p.team_id, AVG(COALESCE(o.win_pct, 0.5)) AS sos
+        SELECT p.team_id, AVG(o.win_pct) AS sos, COUNT(o.win_pct) AS known_games
         FROM played p
-        LEFT JOIN opp_wp o ON o.team_name = p.opponent
+        JOIN opp_wp o ON o.team_name = p.opponent
         GROUP BY p.team_id
       )
-      SELECT t.id, t.name, tsr.games, tsr.wins, tsr.losses, tsr.ties, tsr.win_pct, s.sos
+      SELECT t.id, t.name, tsr.games, tsr.wins, tsr.losses, tsr.ties, tsr.win_pct,
+             s.sos, COALESCE(s.known_games, 0) AS known_games
       FROM team_season_records tsr
       JOIN teams t ON t.id = tsr.team_id
       LEFT JOIN sos s ON s.team_id = tsr.team_id
@@ -1636,13 +1641,17 @@ async function renderHomeLanding() {
   const winPcts   = rows.map(r => parseFloat(r.win_pct) || 0);
   const leagueAvg = winPcts.reduce((a, b) => a + b, 0) / winPcts.length;
 
-  // Adjusted win% = raw win% shifted by how much tougher/easier this team's
-  // schedule was than the league average (opponents' average win%, per game played).
+  // SoS win% = raw win% shifted by how much tougher/easier this team's
+  // schedule was than the league average, using ONLY games against known
+  // (tracked) opponents. A team with zero games against known opponents
+  // has no computable SoS — shown as "—" rather than guessed.
   const ranked = rows.map(r => {
-    const winPct = parseFloat(r.win_pct) || 0;
-    const sos    = r.sos != null ? parseFloat(r.sos) : leagueAvg;
-    const adj    = Math.max(0, Math.min(1, winPct + (sos - leagueAvg)));
-    return Object.assign({}, r, { winPct, sos, adj });
+    const winPct     = parseFloat(r.win_pct) || 0;
+    const knownGames = parseInt(r.known_games) || 0;
+    const hasSos      = knownGames > 0 && r.sos != null;
+    const sos         = hasSos ? parseFloat(r.sos) : null;
+    const adj         = hasSos ? Math.max(0, Math.min(1, winPct + (sos - leagueAvg))) : null;
+    return Object.assign({}, r, { winPct, knownGames, hasSos, sos, adj });
   });
 
   const banner = myTeamId
@@ -1660,7 +1669,7 @@ async function renderHomeLanding() {
       <div class="rank-name">${isMine ? '⭐ ' : ''}${escHtml(r.name)}</div>
       <div class="rank-record">${record}</div>
       <div class="rank-pct">${(r.winPct * 100).toFixed(0)}%</div>
-      <div class="rank-adj">${(r.adj * 100).toFixed(0)}%</div>
+      <div class="rank-sos" title="${r.hasSos ? r.knownGames + ' game(s) vs. known teams' : 'No games yet vs. teams we track'}">${r.hasSos ? (r.adj * 100).toFixed(0) + '%' : '—'}</div>
     </div>`;
   }).join('');
 
@@ -1673,10 +1682,10 @@ async function renderHomeLanding() {
         <div class="rank-name">Team</div>
         <div class="rank-record">Record</div>
         <div class="rank-pct">Win %</div>
-        <div class="rank-adj">Adj %</div>
+        <div class="rank-sos">SoS %</div>
       </div>
       <div class="rank-table">${rowsHTML}</div>
-      <div style="color:#6e7681;font-size:0.7rem;margin-top:10px">Adj % blends win% with strength of schedule (average opponent win%). Games with no score posted are excluded from every calculation.</div>
+      <div style="color:#6e7681;font-size:0.7rem;margin-top:10px">SoS % blends win% with strength of schedule (average win% of opponents we track) — only games against known/tracked teams count toward it. Games with no score posted are excluded from every calculation.</div>
     </div>`;
 }
 
