@@ -266,6 +266,15 @@
   .rank-record { color: #8b949e; font-size: 0.78rem; white-space: nowrap; width: 64px; text-align:right; }
   .rank-pct { font-weight: 700; white-space: nowrap; width: 52px; text-align: right; }
   .rank-sos { font-weight: 700; white-space: nowrap; width: 52px; text-align: right; color: #8b949e; }
+  .sort-toggle { display: flex; border: 1px solid #30363d; border-radius: 6px; overflow: hidden; flex-shrink: 0; }
+  .sort-toggle button {
+    background: #161b22; border: none; color: #8b949e;
+    padding: 6px 12px; font-size: 0.74rem; font-weight: 700; cursor: pointer;
+    white-space: nowrap; transition: all 0.15s;
+  }
+  .sort-toggle button + button { border-left: 1px solid #30363d; }
+  .sort-toggle button:hover { color: #e6edf3; }
+  .sort-toggle button.active { background: #e8b55a; color: #000; }
   .my-team-banner {
     display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
     padding: 10px 14px; background: rgba(232,181,90,0.1); border: 1px solid #e8b55a;
@@ -1604,8 +1613,11 @@ function renderTeamModalList(teams) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  HOME LANDING — team rankings by win% + strength-of-schedule adjustment
+//  HOME LANDING — rank by Win % or by Strength of Schedule
 // ════════════════════════════════════════════════════════════════════════════
+let _homeSortMode   = 'win';  // 'win' | 'sos'
+let _homeRankedData = null;   // cached rows from the last query, re-sorted client-side on toggle
+
 async function renderHomeLanding() {
   const homeEl = document.getElementById('tab-home');
   if (!homeEl) return;
@@ -1629,13 +1641,16 @@ async function renderHomeLanding() {
         JOIN team_season_records tsr ON tsr.team_id = t.id AND tsr.season = '${currentSeason}'
       ),
       -- Only opponents we actually track (have their own team_season_records
-      -- row) count toward strength of schedule. Games against unknown
-      -- opponents still count toward the team's own win%, but are simply
-      -- left out of the SoS average — they never get treated as a 0.500 win.
+      -- row) count toward strength of schedule. Matched case-insensitively —
+      -- e.g. "Team tampa" in a game log vs. "Team Tampa" in our teams table —
+      -- but NOT on partial names ("Firecrackers" alone can't be safely
+      -- resolved to one of several similarly-named teams, so it's left
+      -- unmatched rather than guessed). Games with an unmatched opponent
+      -- still count toward the team's own win%, just not toward SoS.
       sos AS (
         SELECT p.team_id, AVG(o.win_pct) AS sos, COUNT(o.win_pct) AS known_games
         FROM played p
-        JOIN opp_wp o ON o.team_name = p.opponent
+        JOIN opp_wp o ON LOWER(o.team_name) = LOWER(p.opponent)
         GROUP BY p.team_id
       )
       SELECT t.id, t.name, tsr.games, tsr.wins, tsr.losses, tsr.ties, tsr.win_pct,
@@ -1644,7 +1659,6 @@ async function renderHomeLanding() {
       JOIN teams t ON t.id = tsr.team_id
       LEFT JOIN sos s ON s.team_id = tsr.team_id
       WHERE tsr.season = '${currentSeason}' AND LOWER(t.sport) = LOWER('${currentSport}') AND tsr.games > 0
-      ORDER BY tsr.win_pct DESC NULLS LAST, tsr.games DESC
     `);
   } catch (e) {
     console.error('renderHomeLanding error:', e);
@@ -1657,20 +1671,37 @@ async function renderHomeLanding() {
     return;
   }
 
-  const winPcts   = rows.map(r => parseFloat(r.win_pct) || 0);
-  const leagueAvg = winPcts.reduce((a, b) => a + b, 0) / winPcts.length;
-
-  // SoS win% = raw win% shifted by how much tougher/easier this team's
-  // schedule was than the league average, using ONLY games against known
-  // (tracked) opponents. A team with zero games against known opponents
-  // has no computable SoS — shown as "—" rather than guessed.
-  const ranked = rows.map(r => {
+  // Strength of schedule = average win% of KNOWN (tracked) opponents only.
+  // A team with zero games against tracked opponents has no computable SoS
+  // — shown as "—" and sorted to the bottom of the SoS ranking, never
+  // guessed at with a league-average fill-in.
+  _homeRankedData = rows.map(r => {
     const winPct     = parseFloat(r.win_pct) || 0;
     const knownGames = parseInt(r.known_games) || 0;
     const hasSos      = knownGames > 0 && r.sos != null;
     const sos         = hasSos ? parseFloat(r.sos) : null;
-    const adj         = hasSos ? Math.max(0, Math.min(1, winPct + (sos - leagueAvg))) : null;
-    return Object.assign({}, r, { winPct, knownGames, hasSos, sos, adj });
+    return Object.assign({}, r, { winPct, knownGames, hasSos, sos });
+  });
+
+  renderHomeRankingRows();
+}
+
+function setHomeSort(mode) {
+  _homeSortMode = mode;
+  renderHomeRankingRows();
+}
+
+function renderHomeRankingRows() {
+  const homeEl = document.getElementById('tab-home');
+  if (!homeEl || !_homeRankedData) return;
+
+  const sorted = _homeRankedData.slice().sort((a, b) => {
+    if (_homeSortMode === 'sos') {
+      if (a.hasSos !== b.hasSos) return a.hasSos ? -1 : 1; // known-SoS teams first
+      if (a.hasSos) return b.sos - a.sos;
+      return b.winPct - a.winPct; // tiebreak teams with no SoS data by win%
+    }
+    return b.winPct - a.winPct || b.games - a.games;
   });
 
   const banner = myTeamId
@@ -1680,7 +1711,7 @@ async function renderHomeLanding() {
          <button onclick="openMyTeamModal()">Select Your Team</button>
        </div>`;
 
-  const rowsHTML = ranked.map((r, i) => {
+  const rowsHTML = sorted.map((r, i) => {
     const isMine = String(r.id) === myTeamId;
     const record = `${r.wins}-${r.losses}${r.ties > 0 ? '-' + r.ties : ''}`;
     return `<div class="rank-row${isMine ? ' my-team' : ''}">
@@ -1688,13 +1719,19 @@ async function renderHomeLanding() {
       <div class="rank-name">${isMine ? '⭐ ' : ''}${escHtml(r.name)}</div>
       <div class="rank-record">${record}</div>
       <div class="rank-pct">${(r.winPct * 100).toFixed(0)}%</div>
-      <div class="rank-sos" title="${r.hasSos ? r.knownGames + ' game(s) vs. known teams' : 'No games yet vs. teams we track'}">${r.hasSos ? (r.adj * 100).toFixed(0) + '%' : '—'}</div>
+      <div class="rank-sos" title="${r.hasSos ? r.knownGames + ' game(s) vs. known teams' : 'No games yet vs. teams we track'}">${r.hasSos ? (r.sos * 100).toFixed(0) + '%' : '—'}</div>
     </div>`;
   }).join('');
 
   homeEl.innerHTML = `
     <div style="max-width:900px;margin:0 auto">
-      <div style="color:#e8b55a;font-size:1.15rem;font-weight:800;margin-bottom:16px">🏠 ${escHtml(currentSeason)} Rankings</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        <div style="color:#e8b55a;font-size:1.15rem;font-weight:800">🏠 ${escHtml(currentSeason)} Rankings</div>
+        <div class="sort-toggle">
+          <button class="${_homeSortMode === 'win' ? 'active' : ''}" onclick="setHomeSort('win')">Win %</button>
+          <button class="${_homeSortMode === 'sos' ? 'active' : ''}" onclick="setHomeSort('sos')">Strength of Schedule</button>
+        </div>
+      </div>
       ${banner}
       <div class="rank-row" style="background:transparent;border:none;color:#8b949e;font-size:0.68rem;text-transform:uppercase;letter-spacing:1px;font-weight:700">
         <div class="rank-pos">#</div>
@@ -1704,7 +1741,7 @@ async function renderHomeLanding() {
         <div class="rank-sos">SoS %</div>
       </div>
       <div class="rank-table">${rowsHTML}</div>
-      <div style="color:#6e7681;font-size:0.7rem;margin-top:10px">SoS % blends win% with strength of schedule (average win% of opponents we track) — only games against known/tracked teams count toward it. Games with no score posted are excluded from every calculation.</div>
+      <div style="color:#6e7681;font-size:0.7rem;margin-top:10px">SoS % is the average win% of a team's opponents, counting only opponents we track in this app. Ranking by Strength of Schedule sorts teams with no tracked opponents ("—") to the bottom. Games with no score posted are excluded from every calculation.</div>
     </div>`;
 }
 
