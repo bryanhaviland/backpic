@@ -1780,7 +1780,7 @@ function renderHomeRankingRows() {
       <div class="rank-name">${isMine ? '⭐ ' : ''}${escHtml(r.name)}</div>
       <div class="rank-record">${record}</div>
       <div class="rank-pct">${(r.winPct * 100).toFixed(0)}%</div>
-      <div class="rank-sos" title="${r.hasSos ? r.knownGames + ' game(s) vs. known teams' : 'No games yet vs. teams we track'}">${r.hasSos ? (r.sos * 100).toFixed(0) + '%' : '—'}</div>
+      <div class="rank-sos" title="${r.hasSos ? r.knownGames + ' game(s) vs. known teams' : 'No games yet vs. teams we track'}">${r.hasSos ? fmtSos(r.sos) : '—'}</div>
     </div>`;
   }).join('');
 
@@ -1800,15 +1800,22 @@ function renderHomeRankingRows() {
         <div class="rank-name">Team</div>
         <div class="rank-record">Record</div>
         <div class="rank-pct">Win %</div>
-        <div class="rank-sos">SoS %</div>
+        <div class="rank-sos">SoS</div>
       </div>
       <div class="rank-table">${rowsHTML}</div>
-      <div style="color:#6e7681;font-size:0.7rem;margin-top:10px">SoS % is the average win% of a team's opponents, counting only opponents we track in this app. Ranking by Strength of Schedule sorts teams with no tracked opponents ("—") to the bottom. Games with no score posted are excluded from every calculation.</div>
+      <div style="color:#6e7681;font-size:0.7rem;margin-top:10px">SoS is the average winning percentage of a team's opponents, shown as a number like <strong>.650</strong> (not a percent) so it's never confused with Win %. It only counts opponents we track in this app. Ranking by Strength of Schedule sorts teams with no tracked opponents ("—") to the bottom. Games with no score posted are excluded from every calculation.</div>
     </div>`;
 }
 
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Baseball/softball-style winning-percentage number, e.g. .650 (leading
+// zero dropped) rather than a percent, so SoS is never mistaken for Win %.
+function fmtSos(v) {
+  const s = v.toFixed(3);
+  return s.startsWith('0.') ? s.slice(1) : s;
 }
 function escAttr(s) {
   return String(s).replace(/"/g,'&quot;');
