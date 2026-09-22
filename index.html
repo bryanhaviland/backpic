@@ -1907,6 +1907,8 @@ async function renderOverview(games, rec, batting, pitching) {
                COUNT(*) FILTER (WHERE result = 'L') AS opp_wins,
                COUNT(*) FILTER (WHERE result = 'W') AS opp_losses
         FROM games
+        WHERE runs_scored IS NOT NULL AND runs_allowed IS NOT NULL
+          AND NOT (runs_scored = 0 AND runs_allowed = 0)
         GROUP BY opponent
       ) os ON os.opponent = w.opponent
       WHERE w.team_id = ${teamId} AND w.result = 'W'
