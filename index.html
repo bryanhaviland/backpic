@@ -275,6 +275,36 @@
   .sort-toggle button + button { border-left: 1px solid #30363d; }
   .sort-toggle button:hover { color: #e6edf3; }
   .sort-toggle button.active { background: #e8b55a; color: #000; }
+
+  .tourney-scout-card {
+    background: linear-gradient(135deg, rgba(232,181,90,0.08), rgba(232,181,90,0.02));
+    border: 1px solid rgba(232,181,90,0.35);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+  .tourney-scout-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    color: #e8b55a;
+    font-size: 0.95rem;
+    margin-bottom: 8px;
+  }
+  .tourney-scout-date {
+    color: #6e7681;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .tourney-scout-body {
+    color: #c9d1d9;
+    font-size: 0.85rem;
+    line-height: 1.55;
+    white-space: normal;
+  }
   .my-team-banner {
     display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
     padding: 10px 14px; background: rgba(232,181,90,0.1); border: 1px solid #e8b55a;
@@ -1617,6 +1647,7 @@ function renderTeamModalList(teams) {
 // ════════════════════════════════════════════════════════════════════════════
 let _homeSortMode   = 'win';  // 'win' | 'sos'
 let _homeRankedData = null;   // cached rows from the last query, re-sorted client-side on toggle
+let _tournamentScoutHTML = ''; // cached HTML for the current-tournament scouting card, if any
 
 async function renderHomeLanding() {
   const homeEl = document.getElementById('tab-home');
@@ -1683,7 +1714,37 @@ async function renderHomeLanding() {
     return Object.assign({}, r, { winPct, knownGames, hasSos, sos });
   });
 
+  await loadTournamentScouting();
   renderHomeRankingRows();
+}
+
+// Only one tournament is ever "current" — always show the most recently
+// saved scouting note for this sport, nothing older, no list to manage.
+async function loadTournamentScouting() {
+  try {
+    const rows = await sql(`
+      SELECT title, notes, created_at
+      FROM tournament_scouting
+      WHERE LOWER(sport) = LOWER('${currentSport}')
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
+    if (!rows.length) { _tournamentScoutHTML = ''; return; }
+    const r = rows[0];
+    const updated = new Date(r.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const notesHtml = escHtml(r.notes).replace(/\n/g, '<br>');
+    _tournamentScoutHTML = `
+      <div class="tourney-scout-card">
+        <div class="tourney-scout-head">
+          <div>🏆 <strong>${escHtml(r.title)}</strong></div>
+          <div class="tourney-scout-date">Saved ${updated}</div>
+        </div>
+        <div class="tourney-scout-body">${notesHtml}</div>
+      </div>`;
+  } catch (e) {
+    console.error('loadTournamentScouting error:', e);
+    _tournamentScoutHTML = '';
+  }
 }
 
 function setHomeSort(mode) {
@@ -1725,6 +1786,7 @@ function renderHomeRankingRows() {
 
   homeEl.innerHTML = `
     <div style="max-width:900px;margin:0 auto">
+      ${_tournamentScoutHTML}
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:16px;flex-wrap:wrap">
         <div style="color:#e8b55a;font-size:1.15rem;font-weight:800">🏠 ${escHtml(currentSeason)} Rankings</div>
         <div class="sort-toggle">
