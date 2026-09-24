@@ -2266,10 +2266,13 @@ async function renderOverview(games, rec, batting, pitching) {
 
   // Pitching staff — IP instead of W-L
   const fmtIP2 = v => v != null ? Number(v).toFixed(1) : '—';
-  const topPitch = pitching.slice(0,4).map(p => {
+  const _ps = splitPitchers(pitching, batting);
+  const topPitch = _ps.qualified.slice(0,4).map(p => {
     const era = p.era != null ? Number(p.era).toFixed(2) : '—';
     return `<div class="player-row"><span class="player-name">${p.player_name}</span><span class="player-stat">${fmtIP2(p.ip)} IP · ${era} ERA</span></div>`;
-  }).join('') || '<div style="color:#8b949e;font-size:0.82rem">No pitching data</div>';
+  }).join('') + (_ps.limited.length
+      ? `<div style="color:#8b949e;font-size:0.72rem;margin-top:4px">+${_ps.limited.length} limited-innings pitcher${_ps.limited.length>1?'s':''} (&lt;30% of games) — see Pitching tab</div>` : '')
+    || '<div style="color:#8b949e;font-size:0.82rem">No pitching data</div>';
 
   document.getElementById('tab-overview').innerHTML = `
     <div style="max-width:1200px">
@@ -2320,7 +2323,7 @@ async function renderOverview(games, rec, batting, pitching) {
         name: b.player_name,
         avg: b.avg, hr: b.hr, rbi: b.rbi, ops: b.ops, bb: b.bb, k: b.k
       })),
-      pitchers: pitching.map(p => ({
+      pitchers: _ps.qualified.map(p => ({
         name: p.player_name, era: p.era, whip: p.whip,
         w: p.w, l: p.l, k: p.k, bb: p.bb, ip: p.ip
       })),
@@ -2813,6 +2816,17 @@ function renderHitHere(zones, fieldersByZone={}) {
 // ════════════════════════════════════════════════════════════════════════════
 //  PITCHING
 // ════════════════════════════════════════════════════════════════════════════
+// Pitchers with appearances in < 30% of team games are not statistically significant —
+// keep them out of the main ranking so small samples don't float to the top.
+const PITCHER_MIN_GAME_PCT = 0.30;
+function splitPitchers(pitching, batting) {
+  const teamGames = Math.max(0, ...(batting||[]).map(b => +b.gp || 0), ...(pitching||[]).map(p => +p.gp || 0));
+  const minGP = Math.max(1, Math.ceil(teamGames * PITCHER_MIN_GAME_PCT));
+  const qualified = [], limited = [];
+  (pitching||[]).forEach(p => ((+p.gp || 0) >= minGP ? qualified : limited).push(p));
+  return { qualified, limited, minGP, teamGames };
+}
+
 function renderPitching(rows) {
   if (!rows.length) {
     document.getElementById('tab-pitching').innerHTML = '<div class="empty-state">No pitching stats for this team</div>';
@@ -2825,7 +2839,8 @@ function renderPitching(rows) {
   const eraClass = v => v == null ? '' : Number(v) < 2 ? 'good' : Number(v) > 4 ? 'bad' : 'gold';
   const whipClass = v => v == null ? '' : Number(v) < 1.2 ? 'good' : Number(v) > 1.8 ? 'bad' : '';
 
-  const tbl = `<table class="dt">
+  const { qualified, limited, minGP, teamGames } = splitPitchers(rows, _bpBatting);
+  const buildTbl = (list) => `<table class="dt">
     <thead><tr>
       <th>#</th><th>Pitcher</th>
       <th>GP</th><th>IP</th>
@@ -2833,7 +2848,7 @@ function renderPitching(rows) {
       <th>BB</th><th>K</th><th>K/IP</th><th>HBP</th><th>WP</th>
     </tr></thead>
     <tbody>
-    ${rows.map(r => {
+    ${list.map(r => {
       const kpi = (r.ip > 0 && r.k != null) ? (r.k / Number(r.ip)).toFixed(1) : '—';
       return `<tr>
         <td>${r.player_num||'—'}</td>
@@ -2856,7 +2871,12 @@ function renderPitching(rows) {
     <div style="max-width:1400px">
       <div style="color:#e8b55a;font-size:1.1rem;font-weight:800;margin-bottom:4px">${teamName} — Pitching Staff</div>
       <div style="color:#8b949e;font-size:0.78rem;margin-bottom:14px">Green ERA &lt;2.00 · Red ERA &gt;4.00 · K/IP = strikeouts per inning</div>
-      <div class="tbl-wrap">${tbl}</div>
+      ${qualified.length ? `<div class="tbl-wrap">${buildTbl(qualified)}</div>`
+        : '<div style="color:#8b949e;font-size:0.82rem">No pitcher has appeared in 30% of games yet</div>'}
+      ${limited.length ? `
+      <div class="sec-title" style="margin-top:22px">🔸 Limited Innings</div>
+      <div style="color:#8b949e;font-size:0.78rem;margin-bottom:10px">Pitched in fewer than ${minGP} of ${teamGames} games (&lt;30%) — small sample, not statistically significant</div>
+      <div class="tbl-wrap" style="opacity:0.8">${buildTbl(limited)}</div>` : ''}
     </div>`;
 }
 
