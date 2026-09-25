@@ -1923,7 +1923,7 @@ async function loadTeam() {
   const seasonFilter = `p.game_id IN (SELECT id FROM games WHERE team_id=${teamId} AND season='${currentSeason}')`;
   const [games, record, batting, pitching, offPlays, defPlays, catching, playerSpray, defFielders] = await Promise.all([
     sql(`SELECT game_date, opponent, result, runs_scored, runs_allowed, home_away, starting_pitcher
-         FROM games WHERE team_id=${teamId} AND season='${currentSeason}'
+         FROM games WHERE team_id=${teamId} AND season='${currentSeason}' AND result IN ('W','L','T')
          ORDER BY game_date DESC NULLS LAST LIMIT 40`),
     sql(`SELECT SUM(wins) as wins, SUM(losses) as losses, SUM(ties) as ties,
                 SUM(runs_scored) as rf, SUM(runs_allowed) as ra, SUM(games) as g
@@ -3124,7 +3124,7 @@ async function runTournamentAnalysis() {
              COUNT(*) FILTER (WHERE result = 'L')        AS losses,
              COALESCE(SUM(runs_scored),  0)              AS runs_for,
              COALESCE(SUM(runs_allowed), 0)              AS runs_against
-         FROM games WHERE team_id IN (${idList}) AND season='${currentSeason}'
+         FROM games WHERE team_id IN (${idList}) AND season='${currentSeason}' AND result IN ('W','L','T')
          GROUP BY team_id`),
     sql(`SELECT gbs.team_id,
              CASE WHEN SUM(gbs.ab)>0 THEN ROUND(SUM(gbs.h)::NUMERIC/SUM(gbs.ab),3) END AS avg_ba,
@@ -3146,7 +3146,7 @@ async function runTournamentAnalysis() {
     // Last 5 games per team
     sql(`SELECT team_id, result, runs_scored, runs_allowed, game_date, opponent
          FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY team_id ORDER BY game_date DESC) AS rn
-               FROM games WHERE team_id IN (${idList}) AND season='${currentSeason}') sub
+               FROM games WHERE team_id IN (${idList}) AND season='${currentSeason}' AND result IN ('W','L','T')) sub
          WHERE rn <= 5 ORDER BY team_id, rn`),
     // Opponent win rates (for quality tier)
     sql(`SELECT g.team_id, g.opponent, g.result, g.runs_scored, g.runs_allowed,
@@ -3156,15 +3156,15 @@ async function runTournamentAnalysis() {
          JOIN (SELECT opponent, COUNT(*) AS total_games,
                       COUNT(*) FILTER (WHERE result='L') AS opp_wins,
                       COUNT(*) FILTER (WHERE result='W') AS opp_losses
-               FROM games GROUP BY opponent) os ON os.opponent=g.opponent
-         WHERE g.team_id IN (${idList}) AND g.season='${currentSeason}'`),
+               FROM games WHERE result IN ('W','L','T') GROUP BY opponent) os ON os.opponent=g.opponent
+         WHERE g.team_id IN (${idList}) AND g.season='${currentSeason}' AND g.result IN ('W','L','T')`),
     // Common opponents (played by 2+ selected teams)
     sql(`SELECT g.team_id, g.opponent, g.result, g.runs_scored, g.runs_allowed, g.game_date
          FROM games g
-         WHERE g.team_id IN (${idList}) AND g.season='${currentSeason}'
+         WHERE g.team_id IN (${idList}) AND g.season='${currentSeason}' AND g.result IN ('W','L','T')
            AND g.opponent IN (
              SELECT opponent FROM games
-             WHERE team_id IN (${idList}) AND season='${currentSeason}'
+             WHERE team_id IN (${idList}) AND season='${currentSeason}' AND result IN ('W','L','T')
              GROUP BY opponent HAVING COUNT(DISTINCT team_id) >= 2
            )
          ORDER BY g.opponent, g.team_id, g.game_date`)
