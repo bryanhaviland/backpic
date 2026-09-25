@@ -1731,7 +1731,7 @@ async function renderHomeLanding() {
 async function loadTournamentScouting() {
   try {
     const rows = await sql(`
-      SELECT title, notes, created_at, team_ids
+      SELECT id, title, notes, created_at, team_ids, my_games
       FROM tournament_scouting
       WHERE LOWER(sport) = LOWER('${currentSport}')
       ORDER BY created_at DESC
@@ -1748,6 +1748,7 @@ async function loadTournamentScouting() {
           <div>🏆 <strong>${escHtml(r.title)}</strong></div>
           <div class="tourney-scout-date">Saved ${updated}</div>
         </div>
+        ${(Array.isArray(r.my_games) && r.my_games.length) ? `<div style="margin:6px 0 4px;font-size:0.82rem;color:#e6edf3">⭐ <strong>Our games:</strong> ${r.my_games.map((g, i) => `${i + 1}. ${escHtml(g.time ? g.time + ' vs ' : 'vs ')}${escHtml(g.name || '')}`).join(' · ')}</div>` : ''}
         ${(r.team_ids && r.team_ids.length) ? `<button class="tourney-btn" style="margin:6px 0 10px;border-radius:6px" onclick="openSavedTournament()">📊 Open full analysis</button>` : ''}
         <div class="tourney-scout-body">${notesHtml}</div>
       </div>`;
@@ -3421,7 +3422,7 @@ function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap, oppRec
     tbl(th('#') + th('Team') + th('Record') + th('Win %') + th('Run Diff/G') + th('Opp Win % (SoS)'),
       rawOrder.map((id, i) => {
         const r = raw[id];
-        return `<tr style="border-bottom:1px solid #21262d">${td(i + 1)}${td(escHtml(nameOf[id]), 'color:#e6edf3')}${td(_tsRec(r.w, r.l, r.t))}
+        return `<tr style="border-bottom:1px solid #21262d">${td(i + 1)}${td(_tourneyTeamLink(id, nameOf[id]), 'color:#e6edf3')}${td(_tsRec(r.w, r.l, r.t))}
           ${td(`<div style="display:flex;align-items:center;gap:6px"><div style="height:8px;width:${Math.round(r.pct * 90)}px;background:#e8b55a;border-radius:4px"></div>${_tsFmtPct(r.pct)}</div>`)}
           ${td((r.rd > 0 ? '+' : '') + r.rd.toFixed(1), `color:${r.rd >= 0 ? '#3fb950' : '#f85149'}`)}
           ${td(sos[id].avg != null ? _tsFmtPct(sos[id].avg) : '—', `color:${sos[id].avg == null ? '#8b949e' : sos[id].avg >= 0.55 ? '#f85149' : sos[id].avg < 0.45 ? '#3fb950' : '#c9d1d9'}`)}</tr>`;
@@ -3429,7 +3430,7 @@ function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap, oppRec
 
   const h2hHTML = sec('⚔️ Head-to-Head', h2hGames.length ? 'Row team\'s record vs column team this season' : '',
     h2hGames.length ? tbl(th('Team') + order.map(id => th(escHtml(short(nameOf[id])))).join('') + th('vs Field'),
-      order.map(a => `<tr style="border-bottom:1px solid #21262d">${td(escHtml(short(nameOf[a])), 'color:#e6edf3;white-space:nowrap')}${order.map(b => {
+      order.map(a => `<tr style="border-bottom:1px solid #21262d">${td(_tourneyTeamLink(a, short(nameOf[a])), 'color:#e6edf3;white-space:nowrap')}${order.map(b => {
         if (a === b) return td('', 'background:#161b22');
         const r = h2h[a][b], n = r.w + r.l + r.t;
         if (!n) return td('—', 'color:#30363d;text-align:center');
@@ -3455,7 +3456,7 @@ function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap, oppRec
       const move = d > 0 ? `<span style="color:#3fb950;font-size:0.72rem">▲${d} vs raw</span>` : d < 0 ? `<span style="color:#f85149;font-size:0.72rem">▼${-d} vs raw</span>` : '';
       return `<div style="display:flex;gap:12px;padding:10px 12px;margin-bottom:8px;background:#161b22;border:1px solid #30363d;border-radius:6px">
         <div style="font-size:1.3rem;font-weight:800;color:#e8b55a;min-width:32px">${trueRank[id]}</div>
-        <div style="flex:1"><div style="font-weight:700;color:#e6edf3">${escHtml(nameOf[id])} <span style="color:#8b949e;font-weight:400;font-size:0.8rem">${_tsRec(r.w, r.l, r.t)} · ${_tsFmtPct(r.pct)}</span> ${move}</div>
+        <div style="flex:1"><div style="font-weight:700;color:#e6edf3">${_tourneyTeamLink(id, nameOf[id])} <span style="color:#8b949e;font-weight:400;font-size:0.8rem">${_tsRec(r.w, r.l, r.t)} · ${_tsFmtPct(r.pct)}</span> ${move}</div>
         <div style="color:#c9d1d9;font-size:0.82rem;margin-top:4px;line-height:1.45">${escHtml(verdicts[id])}</div></div></div>`;
     }).join(''));
 
@@ -3469,29 +3470,138 @@ function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap, oppRec
 
   return {
     html: alertHTML + takeHTML + trueHTML + rawHTML + h2hHTML + coHTML,
-    notesText, order, verdicts
+    notesText, order, verdicts, raw, trueRank, h2h, nameOf, sos
   };
+}
+
+
+// ── Tournament view helpers: clickable teams + "Our Games" ──
+function openTeamFromTourney(id) {
+  const name = (window._tourneyNames || {})[String(id)] || '';
+  closeTourneyPanel();
+  selectTeamFromModal(String(id), name);
+}
+
+function _tourneyTeamLink(id, label) {
+  return `<a href="#" onclick="event.stopPropagation();openTeamFromTourney('${escAttr(String(id))}');return false"
+    title="Open team page" style="color:inherit;text-decoration:underline dotted #e8b55a;text-underline-offset:3px">${escHtml(label)}</a>`;
+}
+
+// Our games in the tournament, in order — the opponents that matter first
+function renderOurGamesSection() {
+  const ctx = window._tourneyCtx;
+  const el = document.getElementById('ourGamesSection');
+  if (!ctx || !el) return;
+  const { skill, myId, myGames } = ctx;
+  if (!myId) { el.innerHTML = ''; return; }
+  const n = skill.order.length;
+  const games = (myGames || []).filter(g => g && g.team_id && skill.nameOf[String(g.team_id)]);
+  let body;
+  if (!games.length) {
+    body = `<div style="color:#8b949e;font-size:0.82rem;margin-bottom:8px">Pick who ${escHtml(skill.nameOf[myId])} plays, in order, to pin them here.</div>
+      <button class="tourney-btn" style="border-radius:6px" onclick="editOurGames()">＋ Set our games</button>`;
+  } else {
+    body = games.map((g, i) => {
+      const id = String(g.team_id), r = skill.raw[id], h = skill.h2h[myId][id], hn = h.w + h.l + h.t;
+      const vsUs = hn ? `${_tsRec(h.w, h.l, h.t)} vs them` : 'never played them';
+      const vsCol = !hn ? '#8b949e' : h.w > h.l ? '#3fb950' : h.l > h.w ? '#f85149' : '#e8b55a';
+      const sos = skill.sos[id].avg != null ? ` · opp win% ${_tsFmtPct(skill.sos[id].avg)}` : '';
+      return `<div style="display:flex;gap:12px;padding:10px 12px;margin-bottom:8px;background:#1c2330;border:1px solid #e8b55a;border-radius:6px">
+        <div style="min-width:64px;text-align:center">
+          <div style="font-size:0.7rem;color:#8b949e;text-transform:uppercase">Game ${i + 1}</div>
+          <div style="font-size:0.85rem;font-weight:700;color:#e8b55a">${escHtml(g.time || '')}</div>
+        </div>
+        <div style="flex:1">
+          <div style="font-weight:700;color:#e6edf3">${_tourneyTeamLink(id, skill.nameOf[id])}
+            <span style="color:#8b949e;font-weight:400;font-size:0.8rem">True #${skill.trueRank[id]} of ${n} · ${_tsRec(r.w, r.l, r.t)} (${_tsFmtPct(r.pct)})${sos}</span></div>
+          <div style="font-size:0.78rem;margin-top:2px;color:${vsCol};font-weight:700">We are ${vsUs}</div>
+          <div style="color:#c9d1d9;font-size:0.82rem;margin-top:4px;line-height:1.45">${escHtml(skill.verdicts[id])}</div>
+        </div></div>`;
+    }).join('') + `<button class="link-btn" style="font-size:0.78rem" onclick="editOurGames()">✎ Edit our games</button>`;
+  }
+  el.innerHTML = `<div class="sec-title" style="margin-bottom:8px">⭐ Our Games — ${escHtml(skill.nameOf[myId])}</div>${body}`;
+}
+
+function editOurGames() {
+  const ctx = window._tourneyCtx, el = document.getElementById('ourGamesSection');
+  if (!ctx || !el) return;
+  const { skill, myId } = ctx;
+  const opts = skill.order.filter(id => id !== myId)
+    .map(id => `<option value="${escAttr(id)}">${escHtml(skill.nameOf[id])}</option>`).join('');
+  const cur = (ctx.myGames || []);
+  const rows = [0, 1, 2, 3, 4].map(i => {
+    const g = cur[i] || {};
+    return `<div style="display:flex;gap:6px;margin-bottom:6px">
+      <input class="modal-search og-time" placeholder="Time (e.g. 3:30 PM)" value="${escAttr(g.time || '')}" style="width:130px;margin:0">
+      <select class="modal-search og-team" style="flex:1;margin:0"><option value="">— Game ${i + 1} opponent —</option>${opts}</select>
+    </div>`;
+  }).join('');
+  el.innerHTML = `<div class="sec-title" style="margin-bottom:8px">⭐ Our Games — ${escHtml(skill.nameOf[myId])}</div>
+    <div style="color:#8b949e;font-size:0.78rem;margin-bottom:8px">In play order. Leave extra rows blank.</div>
+    ${rows}
+    <div style="display:flex;gap:8px;margin-top:6px">
+      <button class="btn-primary" onclick="saveOurGames()">Save</button>
+      <button class="btn-secondary" onclick="renderOurGamesSection()">Cancel</button>
+      <span id="ogStatus" style="font-size:0.78rem;color:#8b949e;align-self:center"></span>
+    </div>`;
+  const sels = el.querySelectorAll('.og-team');
+  cur.forEach((g, i) => { if (sels[i] && g.team_id) sels[i].value = String(g.team_id); });
+}
+
+async function saveOurGames() {
+  const ctx = window._tourneyCtx, el = document.getElementById('ourGamesSection');
+  if (!ctx || !el) return;
+  const times = [...el.querySelectorAll('.og-time')].map(x => x.value.trim());
+  const teams = [...el.querySelectorAll('.og-team')].map(x => x.value);
+  const games = teams.map((id, i) => id ? { team_id: Number(id), name: ctx.skill.nameOf[id], time: times[i] } : null).filter(Boolean);
+  ctx.myGames = games;
+  const st = document.getElementById('ogStatus');
+  try {
+    if (ctx.tourneyId) {
+      const cowork = getCowork();
+      if (!cowork && _sbClient) {
+        const { error } = await _sbClient.from('tournament_scouting').update({ my_games: games }).eq('id', ctx.tourneyId);
+        if (error) throw error;
+      } else if (cowork) {
+        await cowork.callMcpTool('mcp__062183b1-0e31-434a-b129-4ba2a01aa3a2__execute_sql', {
+          project_id: 'fzndpqbjmhwwouxktmol',
+          query: `UPDATE tournament_scouting SET my_games='${JSON.stringify(games).replace(/'/g, "''")}'::jsonb WHERE id=${Number(ctx.tourneyId)}`
+        });
+      }
+      await loadTournamentScouting();
+      if (typeof renderHomeRankingRows === 'function') { try { renderHomeRankingRows(); } catch (e) {} }
+    }
+    renderOurGamesSection();
+  } catch (e) {
+    console.error('saveOurGames error:', e);
+    if (st) { st.style.color = '#f85149'; st.textContent = '⚠ Not saved: ' + (e.message || e); }
+  }
 }
 
 // Save the current tournament so it shows on the Home dashboard
 async function saveTournamentScouting(title, notes, teamIds) {
   const row = { title, notes, sport: currentSport, season: currentSeason, team_ids: teamIds.map(Number) };
+  let newId = null;
   const cowork = getCowork();
   if (!cowork && _sbClient) {
-    const { error } = await _sbClient.from('tournament_scouting').insert(row);
+    const { data, error } = await _sbClient.from('tournament_scouting').insert(row).select('id').single();
     if (error) throw error;
+    newId = data && data.id;
   } else if (cowork) {
     const q = s => `'${String(s).replace(/'/g, "''")}'`;
-    await cowork.callMcpTool('mcp__062183b1-0e31-434a-b129-4ba2a01aa3a2__execute_sql', {
+    const res = await cowork.callMcpTool('mcp__062183b1-0e31-434a-b129-4ba2a01aa3a2__execute_sql', {
       project_id: 'fzndpqbjmhwwouxktmol',
       query: `INSERT INTO tournament_scouting (title, notes, sport, season, team_ids)
-              VALUES (${q(title)}, ${q(notes)}, ${q(currentSport)}, ${q(currentSeason)}, ARRAY[${row.team_ids.join(',')}]::bigint[])`
+              VALUES (${q(title)}, ${q(notes)}, ${q(currentSport)}, ${q(currentSeason)}, ARRAY[${row.team_ids.join(',')}]::bigint[])
+              RETURNING id`
     });
+    try { newId = (parseMcp(res)[0] || {}).id; } catch (e) {}
   } else {
     throw new Error('Not signed in');
   }
   await loadTournamentScouting();
   if (typeof renderHomeRankingRows === 'function') { try { renderHomeRankingRows(); } catch (e) {} }
+  return newId;
 }
 
 // Re-open a saved tournament from the Home card
@@ -3499,16 +3609,18 @@ async function openSavedTournament() {
   const t = window._savedTourney;
   if (!t || !t.team_ids || !t.team_ids.length) return;
   const rows = await sql(`SELECT id, name FROM teams WHERE id IN (${t.team_ids.map(Number).join(',')})`);
-  runTournamentAnalysis({ teams: rows.map(r => ({ id: String(r.id), name: r.name })), title: t.title });
+  runTournamentAnalysis({ teams: rows.map(r => ({ id: String(r.id), name: r.name })), title: t.title,
+                          my_games: t.my_games || null, id: t.id });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 //  TOURNAMENT ANALYSIS
 // ════════════════════════════════════════════════════════════════════════════
 async function runTournamentAnalysis(preset) {
-  let selected, tourneyTitle, doSave;
+  let selected, tourneyTitle, doSave, presetGames = null, presetId = null;
   if (preset && preset.teams) {
     selected = preset.teams; tourneyTitle = preset.title || 'Tournament'; doSave = false;
+    presetGames = preset.my_games || null; presetId = preset.id || null;
   } else {
     const checked = [...document.querySelectorAll('#checkboxList input:checked')];
     if (checked.length < 2) return;
@@ -3704,7 +3816,7 @@ async function runTournamentAnalysis(preset) {
       <div class="team-card-header" onclick="toggleCard(this)">
         <div class="rank-badge ${rankClass}">${rankLabel}</div>
         <div style="flex:1">
-          <div style="font-weight:700;font-size:0.95rem;color:#e6edf3">${s.t.name}</div>
+          <div style="font-weight:700;font-size:0.95rem;color:#e6edf3">${_tourneyTeamLink(s.t.id, s.t.name)}</div>
           <div style="font-size:0.78rem;color:#8b949e;margin-top:2px">${recStr}</div>
         </div>
         <div style="text-align:right;min-width:80px">
@@ -3785,12 +3897,16 @@ async function runTournamentAnalysis(preset) {
 
   // ── Skill methodology: raw win% → H2H → common opponents → True Rank → takeaways ──
   const skill = buildTournamentSkillAnalysis(selected, scored, gamesAll || [], oppMap, oppRecRows || [], trackedRecRows || []);
+  window._tourneyNames = Object.fromEntries(selected.map(t => [String(t.id), t.name]));
+  const _myId = (myTeamId && selected.some(t => String(t.id) === String(myTeamId))) ? String(myTeamId) : null;
+  window._tourneyCtx = { skill, myId: _myId, myGames: presetGames, tourneyId: presetId };
 
   results.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
       <div style="font-size:1.05rem;font-weight:800;color:#e6edf3">${escHtml(tourneyTitle)}</div>
       <div id="tourneySaveStatus" style="margin-left:auto;font-size:0.78rem;color:#8b949e">${doSave ? '💾 Saving…' : ''}</div>
     </div>
+    <div id="ourGamesSection" style="margin-bottom:10px"></div>
     ${skill.html}
     <div style="margin-top:28px">
       <div class="sec-title" style="margin-bottom:6px">📋 Team Detail — Composite Strength</div>
@@ -3804,10 +3920,12 @@ async function runTournamentAnalysis(preset) {
     </div>
   `;
 
+  renderOurGamesSection();
+
   if (doSave) {
     const st = document.getElementById('tourneySaveStatus');
     try {
-      await saveTournamentScouting(tourneyTitle, skill.notesText, selected.map(t => t.id));
+      window._tourneyCtx.tourneyId = await saveTournamentScouting(tourneyTitle, skill.notesText, selected.map(t => t.id));
       if (st) { st.style.color = '#3fb950'; st.textContent = '✓ Saved to Home dashboard'; }
     } catch (e) {
       console.error('saveTournamentScouting error:', e);
