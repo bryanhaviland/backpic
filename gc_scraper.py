@@ -1159,14 +1159,37 @@ def find_team(page: Page, team_name: str, sport: str, timeout: int,
     return best["id"]
 
 
+def _goto_soft(page, url, timeout):
+    """Navigate without requiring the full 'load' event (GC pages can hang on
+    third-party resources). Waits for DOM, then best-effort network idle."""
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=max(timeout, 30000))
+    except PWTimeout:
+        # GC sometimes hangs on direct deep links (e.g. /schedule) for headless
+        # Chromium. Load the team root and navigate client-side instead.
+        m = re.match(r"https://web\.gc\.com/teams/([^/]+)/(.+)$", url)
+        if not m:
+            raise
+        tid, tail = m.group(1), m.group(2)
+        print(f"[nav] Direct load timed out; routing via team page → {tail}")
+        page.goto(f"https://web.gc.com/teams/{tid}", wait_until="domcontentloaded", timeout=60000)
+        sel = f"a[href$='/{tail}']"
+        page.wait_for_selector(sel, timeout=30000)
+        page.click(sel)
+        page.wait_for_url(re.compile(re.escape(tail) + r"$"), timeout=30000)
+    try:
+        page.wait_for_load_state("networkidle", timeout=min(timeout, 15000))
+    except PWTimeout:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Step 2: Schedule
 # ---------------------------------------------------------------------------
 
 def scrape_schedule(page: Page, team_id: str, timeout: int) -> list[dict]:
     print("[schedule] Fetching schedule …")
-    page.goto(f"https://web.gc.com/teams/{team_id}/schedule", timeout=timeout)
-    page.wait_for_load_state("networkidle", timeout=timeout)
+    _goto_soft(page, f"https://web.gc.com/teams/{team_id}/schedule", timeout)
     time.sleep(4)
 
     # Use JS to walk each game link's DOM context and find:
@@ -2307,8 +2330,7 @@ def get_team_slug(page: Page, team_id: str, timeout: int) -> Optional[str]:
       2. Slug extracted from a game event link on the page
       3. Returns None (falls back to short URL — may load wrong team)
     """
-    page.goto(f"https://web.gc.com/teams/{team_id}/schedule", timeout=timeout)
-    page.wait_for_load_state("networkidle", timeout=timeout)
+    _goto_soft(page, f"https://web.gc.com/teams/{team_id}/schedule", timeout)
     time.sleep(3)
 
     print(f"[slug] Page URL after redirect: {page.url}")
