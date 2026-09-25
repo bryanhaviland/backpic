@@ -1388,6 +1388,7 @@
       <button class="modal-close" onclick="closeTourneyModal()">✕</button>
     </div>
     <div class="modal-body">
+      <input class="modal-search" id="tourneyName" placeholder="🏆 Tournament name (e.g. NSA New Tampa 12U – Sep 26)" style="margin-bottom:8px">
       <input class="modal-search" id="teamSearch" placeholder="🔍 Filter teams…" oninput="filterTeamList(this.value)">
       <div class="modal-actions">
         <button class="link-btn" onclick="selectAllTeams()">Select all</button>
@@ -1728,7 +1729,7 @@ async function renderHomeLanding() {
 async function loadTournamentScouting() {
   try {
     const rows = await sql(`
-      SELECT title, notes, created_at
+      SELECT title, notes, created_at, team_ids
       FROM tournament_scouting
       WHERE LOWER(sport) = LOWER('${currentSport}')
       ORDER BY created_at DESC
@@ -1736,6 +1737,7 @@ async function loadTournamentScouting() {
     `);
     if (!rows.length) { _tournamentScoutHTML = ''; return; }
     const r = rows[0];
+    window._savedTourney = r;
     const updated = new Date(r.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     const notesHtml = escHtml(r.notes).replace(/\n/g, '<br>');
     _tournamentScoutHTML = `
@@ -1744,6 +1746,7 @@ async function loadTournamentScouting() {
           <div>🏆 <strong>${escHtml(r.title)}</strong></div>
           <div class="tourney-scout-date">Saved ${updated}</div>
         </div>
+        ${(r.team_ids && r.team_ids.length) ? `<button class="tourney-btn" style="margin:6px 0 10px;border-radius:6px" onclick="openSavedTournament()">📊 Open full analysis</button>` : ''}
         <div class="tourney-scout-body">${notesHtml}</div>
       </div>`;
   } catch (e) {
@@ -3096,19 +3099,376 @@ function selectNoneTeams() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+//  TOURNAMENT STRENGTH ANALYSIS — tournament-strength-analysis skill methodology
+//  Raw win% → head-to-head → common opponents → True Rank verdicts → takeaways
+// ════════════════════════════════════════════════════════════════════════════
+const _TS_STOP = new Set(['softball','fastpitch','fast','pitch','the','and']);
+function _tsTokens(name) {
+  return String(name || '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ').split(' ')
+    .filter(w => w && !/^\d{1,2}u$/.test(w) && !_TS_STOP.has(w));
+}
+function _tsAge(name) {
+  const m = String(name || '').match(/\b(\d{1,2})\s*u\b/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+// Does a free-text opponent name refer to tournament team `teamName`?
+function _tsSameTeam(teamName, oppName) {
+  const a = _tsTokens(teamName), b = new Set(_tsTokens(oppName));
+  if (!a.length || !b.size) return false;
+  if (a.every(w => b.has(w))) return true;
+  const bArr = [...b], aSet = new Set(a);
+  return bArr.length >= 2 && bArr.every(w => aSet.has(w));
+}
+const _tsPct = (w, l, t) => (w + l + t) ? (w + 0.5 * t) / (w + l + t) : 0;
+const _tsFmtPct = p => p.toFixed(3).replace(/^0/, '');
+const _tsRec = (w, l, t) => `${w}-${l}${t ? '-' + t : ''}`;
+
+function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap) {
+  const ids = selected.map(t => String(t.id));
+  const nameOf = Object.fromEntries(selected.map(t => [String(t.id), t.name]));
+  const short = n => {
+    const w = String(n).replace(/[-–]/g, ' ').split(/\s+/)
+      .filter(x => x && !/^\d{1,2}u$/i.test(x) && !/^(softball|fastpitch)$/i.test(x));
+    return (w.length <= 3 ? w : [w[0], w[1], w[w.length - 1]]).join(' ');
+  };
+  const byTeam = {};
+  ids.forEach(id => byTeam[id] = []);
+  gamesAll.forEach(g => { if (byTeam[String(g.team_id)]) byTeam[String(g.team_id)].push(g); });
+
+  // ── Team age (from name, else most common opponent age) ──
+  const teamAge = {};
+  ids.forEach(id => {
+    let a = _tsAge(nameOf[id]);
+    if (a == null) {
+      const cnt = {};
+      byTeam[id].forEach(g => { const oa = _tsAge(g.opponent); if (oa) cnt[oa] = (cnt[oa] || 0) + 1; });
+      const best = Object.entries(cnt).sort((x, y) => y[1] - x[1])[0];
+      a = best ? +best[0] : null;
+    }
+    teamAge[id] = a;
+  });
+
+  // ── Step 3: raw record / win% ──
+  const raw = {};
+  ids.forEach(id => {
+    const gs = byTeam[id];
+    const w = gs.filter(g => g.result === 'W').length;
+    const l = gs.filter(g => g.result === 'L').length;
+    const t = gs.filter(g => g.result === 'T').length;
+    let up = 0, down = 0, upW = 0, downW = 0;
+    gs.forEach(g => {
+      const oa = _tsAge(g.opponent);
+      if (!oa || !teamAge[id]) return;
+      if (oa > teamAge[id]) { up++; if (g.result === 'W') upW++; }
+      if (oa < teamAge[id]) { down++; if (g.result === 'W') downW++; }
+    });
+    const rf = gs.reduce((s, g) => s + (+g.runs_scored || 0), 0);
+    const ra = gs.reduce((s, g) => s + (+g.runs_allowed || 0), 0);
+    raw[id] = { w, l, t, n: w + l + t, pct: _tsPct(w, l, t), up, down, upW, downW, rd: (w + l + t) ? (rf - ra) / (w + l + t) : 0 };
+  });
+  const rawOrder = ids.slice().sort((a, b) => raw[b].pct - raw[a].pct || raw[b].n - raw[a].n);
+  const rawRank = Object.fromEntries(rawOrder.map((id, i) => [id, i + 1]));
+
+  // ── Step 4: head-to-head ──
+  const h2hGames = [];
+  const seen = new Set();
+  ids.forEach(a => byTeam[a].forEach(g => {
+    const b = ids.find(x => x !== a && _tsSameTeam(nameOf[x], g.opponent));
+    if (!b) return;
+    const pair = [a, b].sort().join('|');
+    const scoreKey = [+g.runs_scored || 0, +g.runs_allowed || 0].sort((x, y) => x - y).join('-');
+    const key = `${pair}|${g.game_date}|${scoreKey}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    h2hGames.push({ a, b, date: g.game_date, result: g.result, rs: +g.runs_scored || 0, ra: +g.runs_allowed || 0 });
+  }));
+  const h2h = {}; // h2h[a][b] = {w,l,t}
+  ids.forEach(a => { h2h[a] = {}; ids.forEach(b => h2h[a][b] = { w: 0, l: 0, t: 0 }); });
+  h2hGames.forEach(g => {
+    const r = g.result, o = r === 'W' ? 'L' : r === 'L' ? 'W' : 'T';
+    h2h[g.a][g.b][r === 'W' ? 'w' : r === 'L' ? 'l' : 't']++;
+    h2h[g.b][g.a][o === 'W' ? 'w' : o === 'L' ? 'l' : 't']++;
+  });
+  const h2hTot = {};
+  ids.forEach(a => {
+    const s = { w: 0, l: 0, t: 0 };
+    ids.forEach(b => { s.w += h2h[a][b].w; s.l += h2h[a][b].l; s.t += h2h[a][b].t; });
+    s.n = s.w + s.l + s.t; s.pct = _tsPct(s.w, s.l, s.t);
+    h2hTot[a] = s;
+  });
+  const h2hNotes = [];
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+    const a = ids[i], b = ids[j], r = h2h[a][b], n = r.w + r.l + r.t;
+    if (n >= 2 && (r.w === n || r.l === n)) {
+      const [win, lose] = r.w === n ? [a, b] : [b, a];
+      h2hNotes.push(`🧹 ${nameOf[win]} swept ${nameOf[lose]} ${n}-0`);
+    }
+  }
+  h2hGames.forEach(g => {
+    const winner = g.result === 'W' ? g.a : g.result === 'L' ? g.b : null;
+    if (!winner) return;
+    const loser = winner === g.a ? g.b : g.a;
+    const margin = Math.abs(g.rs - g.ra);
+    if (raw[winner].pct + 0.05 < raw[loser].pct)
+      h2hNotes.push(`⚡ Upset: ${nameOf[winner]} (${_tsFmtPct(raw[winner].pct)}) beat ${nameOf[loser]} (${_tsFmtPct(raw[loser].pct)}) ${Math.max(g.rs, g.ra)}-${Math.min(g.rs, g.ra)}`);
+    else if (margin >= 7)
+      h2hNotes.push(`💥 Lopsided: ${nameOf[winner]} over ${nameOf[loser]} ${Math.max(g.rs, g.ra)}-${Math.min(g.rs, g.ra)}`);
+  });
+
+  // ── Step 5: common opponents (non-tournament, normalized names) ──
+  const opp = {}; // key -> {names:{}, byTeam:{id:[games]}}
+  ids.forEach(id => byTeam[id].forEach(g => {
+    if (ids.some(x => _tsSameTeam(nameOf[x], g.opponent))) return;
+    const toks = _tsTokens(g.opponent);
+    if (!toks.length || /^tbd/i.test(g.opponent || '')) return;
+    const key = toks.slice().sort().join(' ') + '|' + (_tsAge(g.opponent) || '');
+    if (!opp[key]) opp[key] = { names: {}, byTeam: {} };
+    opp[key].names[g.opponent] = (opp[key].names[g.opponent] || 0) + 1;
+    (opp[key].byTeam[id] = opp[key].byTeam[id] || []).push(g);
+  }));
+  const common = Object.values(opp)
+    .filter(o => Object.keys(o.byTeam).length >= 2)
+    .map(o => ({ name: Object.entries(o.names).sort((x, y) => y[1] - x[1])[0][0], byTeam: o.byTeam }))
+    .sort((x, y) => Object.keys(y.byTeam).length - Object.keys(x.byTeam).length || x.name.localeCompare(y.name));
+  // Relative margin: team's avg run diff vs a common opponent minus the field's avg vs that opponent
+  const coRel = {}; ids.forEach(id => coRel[id] = { sum: 0, n: 0, w: 0, l: 0, t: 0 });
+  common.forEach(c => {
+    const avgs = Object.fromEntries(Object.entries(c.byTeam).map(([id, gs]) =>
+      [id, gs.reduce((s, g) => s + ((+g.runs_scored || 0) - (+g.runs_allowed || 0)), 0) / gs.length]));
+    const field = Object.values(avgs).reduce((s, v) => s + v, 0) / Object.values(avgs).length;
+    Object.entries(avgs).forEach(([id, v]) => {
+      coRel[id].sum += v - field; coRel[id].n++;
+      c.byTeam[id].forEach(g => { coRel[id][g.result === 'W' ? 'w' : g.result === 'L' ? 'l' : 't']++; });
+    });
+  });
+
+  // ── Strength of schedule from opponents' win% (all tracked games) ──
+  const sos = {};
+  ids.forEach(id => {
+    const rows = (oppMap[id] || []).filter(r => r.opp_wpct != null && +r.total_games >= 3);
+    const qW = rows.filter(r => r.result === 'W' && +r.opp_wpct > 0.5).map(r => r);
+    const badL = rows.filter(r => r.result === 'L' && +r.opp_wpct < 0.4);
+    sos[id] = {
+      avg: rows.length ? rows.reduce((s, r) => s + +r.opp_wpct, 0) / rows.length : null,
+      n: rows.length,
+      qualityWins: qW.sort((x, y) => y.opp_wpct - x.opp_wpct),
+      badLosses: badL
+    };
+  });
+
+  // ── Step 6: True Rank ──
+  const compOf = Object.fromEntries(scored.map(s => [String(s.t.id), s.composite]));
+  const trueScore = {};
+  ids.forEach(id => {
+    const r = raw[id];
+    // Small-sample shrink toward .500 (5 phantom games), and a neutral-leaning H2H when teams never met the field
+    const adjPct = (r.w + 0.5 * r.t + 2.5) / (r.n + 5);
+    const h = h2hTot[id].n ? (h2hTot[id].w + 0.5 * h2hTot[id].t + 1) / (h2hTot[id].n + 2) : 0.5 + (adjPct - 0.5) * 0.5;
+    const c = coRel[id].n ? Math.min(1, Math.max(0, 0.5 + (coRel[id].sum / coRel[id].n) / 12)) : 0.5;
+    const s = sos[id].avg != null ? sos[id].avg : 0.5;
+    let score = 0.30 * adjPct + 0.25 * h + 0.15 * c + 0.15 * s + 0.15 * ((compOf[id] || 0) / 100);
+    if (r.n && r.up / r.n >= 0.3) score += 0.03;
+    if (r.n && r.down / r.n >= 0.3) score -= 0.05;
+    if (!r.n) score = -1;
+    trueScore[id] = score;
+  });
+  let order = ids.slice().sort((a, b) => trueScore[b] - trueScore[a]);
+  // Direct H2H evidence overrides adjacent ranks (skill: H2H trumps raw win%)
+  for (let pass = 0; pass < ids.length; pass++) {
+    let swapped = false;
+    for (let i = 0; i < order.length - 1; i++) {
+      const hi = order[i], lo = order[i + 1], r = h2h[lo][hi];
+      if (r.w > r.l) { order[i] = lo; order[i + 1] = hi; swapped = true; }
+    }
+    if (!swapped) break;
+  }
+  const trueRank = Object.fromEntries(order.map((id, i) => [id, i + 1]));
+
+  const verdict = id => {
+    const r = raw[id], s = sos[id], h = h2hTot[id], co = coRel[id], parts = [];
+    if (!r.n) return 'No completed games on record — not enough data to rate.';
+    if (s.qualityWins.length) {
+      const best = s.qualityWins[0];
+      parts.push(`${s.qualityWins.length} win${s.qualityWins.length > 1 ? 's' : ''} vs .500+ teams (best: ${best.opponent} ${best.runs_scored}-${best.runs_allowed})`);
+    } else if (r.pct >= 0.6 && s.n >= 5) parts.push('record built without a win over a .500+ team');
+    if (s.badLosses.length) parts.push(`${s.badLosses.length} bad loss${s.badLosses.length > 1 ? 'es' : ''} to sub-.400 teams`);
+    if (s.avg != null && r.pct >= 0.6 && s.avg < 0.45) parts.push(`record looks inflated by a soft schedule (opp win% ${_tsFmtPct(s.avg)})`);
+    if (s.avg != null && r.pct < 0.5 && s.avg > 0.55) parts.push(`record is depressed by a tough schedule (opp win% ${_tsFmtPct(s.avg)})`);
+    if (r.up && r.up / r.n >= 0.2) parts.push(`played up in ${r.up} games (${r.upW} W)`);
+    if (r.down && r.down / r.n >= 0.2) parts.push(`${r.down} games vs younger divisions — discount the record`);
+    if (h.n) {
+      const beat = ids.filter(o => h2h[id][o].w > h2h[id][o].l).map(o => short(nameOf[o]));
+      const lost = ids.filter(o => h2h[id][o].l > h2h[id][o].w).map(o => short(nameOf[o]));
+      let t = `${_tsRec(h.w, h.l, h.t)} vs the field`;
+      if (beat.length) t += `, owns ${beat.join(', ')}`;
+      if (lost.length) t += `, lost to ${lost.join(', ')}`;
+      parts.push(t);
+    } else parts.push('no games vs the field — H2H unknown');
+    if (co.n) {
+      const m = co.sum / co.n;
+      if (Math.abs(m) >= 1.5) parts.push(`${m > 0 ? '+' : ''}${m.toFixed(1)} runs/game relative to the field vs common opponents`);
+    }
+    let lead = '';
+    const diff = rawRank[id] - trueRank[id];
+    if (diff >= 2) lead = 'Better than the record — ';
+    else if (diff <= -2) lead = 'Record overstates them — ';
+    const txt = parts.join('; ');
+    return lead ? lead + txt + '.' : txt.charAt(0).toUpperCase() + txt.slice(1) + '.';
+  };
+
+  // ── Step 7: takeaways ──
+  const takeaways = [];
+  const top = order[0];
+  if (top && raw[top].n) {
+    const why = [];
+    if (h2hTot[top].n) why.push(`${_tsRec(h2hTot[top].w, h2hTot[top].l, h2hTot[top].t)} vs the field`);
+    else why.push('no games vs the field yet');
+    if (coRel[top].n) why.push(`${(coRel[top].sum / coRel[top].n) >= 0 ? '+' : ''}${(coRel[top].sum / coRel[top].n).toFixed(1)} runs/game vs the field against common opponents`);
+    if (sos[top].qualityWins.length) why.push(`${sos[top].qualityWins.length} quality wins`);
+    why.push(`${_tsRec(raw[top].w, raw[top].l, raw[top].t)} overall`);
+    takeaways.push(`True #1: ${nameOf[top]} — ${why.join(', ')}.`);
+  }
+  order.filter(id => rawRank[id] - trueRank[id] >= 2).forEach(id =>
+    takeaways.push(`Dark horse: ${nameOf[id]} — raw #${rawRank[id]} but true #${trueRank[id]}; the record undersells them.`));
+  order.filter(id => trueRank[id] - rawRank[id] >= 2).forEach(id =>
+    takeaways.push(`Misleading record: ${nameOf[id]} — raw #${rawRank[id]} (${_tsFmtPct(raw[id].pct)}) but true #${trueRank[id]}.`));
+  const watch = [];
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+    const a = ids[i], b = ids[j], r = h2h[a][b], n = r.w + r.l + r.t;
+    if (n && Math.abs(r.w - r.l) <= 1 && n >= 2) watch.push(`${short(nameOf[a])} vs ${short(nameOf[b])} (split ${_tsRec(r.w, r.l, r.t)})`);
+  }
+  if (order.length >= 2 && !(h2h[order[0]][order[1]].w + h2h[order[0]][order[1]].l + h2h[order[0]][order[1]].t))
+    watch.push(`${short(nameOf[order[0]])} vs ${short(nameOf[order[1]])} (top 2, never met)`);
+  if (watch.length) takeaways.push(`Matchups to watch: ${watch.slice(0, 4).join('; ')}.`);
+  const small = ids.filter(id => raw[id].n && raw[id].n < 10);
+  if (small.length) takeaways.push(`Small samples (<10 games): ${small.map(id => short(nameOf[id])).join(', ')} — treat their numbers with caution.`);
+
+  // ── Alerts ──
+  const alerts = [];
+  const ages = [...new Set(ids.map(id => teamAge[id]).filter(Boolean))];
+  if (ages.length > 1) {
+    const mode = ages.map(a => [a, ids.filter(id => teamAge[id] === a).length]).sort((x, y) => y[1] - x[1])[0][0];
+    ids.filter(id => teamAge[id] && teamAge[id] !== mode).forEach(id =>
+      alerts.push(`${nameOf[id]} looks like a ${teamAge[id]}U team in a ${mode}U field — record is not directly comparable.`));
+  }
+  ids.filter(id => !raw[id].n).forEach(id => alerts.push(`${nameOf[id]} has no completed games this season — excluded from ratings.`));
+  small.forEach(id => alerts.push(`${nameOf[id]}: only ${raw[id].n} games — small sample.`));
+
+  // ── HTML ──
+  const th = s => `<th style="color:#8b949e;font-size:0.72rem;padding:6px 8px;text-align:left;white-space:nowrap">${s}</th>`;
+  const td = (s, st = '') => `<td style="padding:6px 8px;font-size:0.82rem;${st}">${s}</td>`;
+  const tbl = (head, body) => `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse"><thead><tr style="border-bottom:2px solid #30363d">${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  const sec = (title, sub, inner) => `<div style="margin-top:24px"><div class="sec-title" style="margin-bottom:6px">${title}</div>${sub ? `<div style="font-size:0.72rem;color:#8b949e;margin-bottom:10px">${sub}</div>` : ''}${inner}</div>`;
+
+  const alertHTML = alerts.length ? `<div style="background:#3b2a0a;border:1px solid #e8b55a;border-radius:6px;padding:10px 14px;margin-bottom:8px;font-size:0.8rem;color:#f0d9a8">⚠️ ${alerts.map(escHtml).join('<br>⚠️ ')}</div>` : '';
+
+  const rawHTML = sec('📊 Raw Ranking — Win %', 'Ties count as ½ win · * = fewer than 10 games',
+    tbl(th('#') + th('Team') + th('Record') + th('Win %') + th('Run Diff/G'),
+      rawOrder.map((id, i) => {
+        const r = raw[id];
+        return `<tr style="border-bottom:1px solid #21262d">${td(i + 1)}${td(escHtml(nameOf[id]) + (r.n < 10 ? ' *' : ''), 'color:#e6edf3')}${td(_tsRec(r.w, r.l, r.t))}
+          ${td(`<div style="display:flex;align-items:center;gap:6px"><div style="height:8px;width:${Math.round(r.pct * 90)}px;background:#e8b55a;border-radius:4px"></div>${_tsFmtPct(r.pct)}</div>`)}
+          ${td((r.rd > 0 ? '+' : '') + r.rd.toFixed(1), `color:${r.rd >= 0 ? '#3fb950' : '#f85149'}`)}</tr>`;
+      }).join('')));
+
+  const h2hHTML = sec('⚔️ Head-to-Head', h2hGames.length ? 'Row team\'s record vs column team this season' : '',
+    h2hGames.length ? tbl(th('Team') + order.map(id => th(escHtml(short(nameOf[id])))).join('') + th('vs Field'),
+      order.map(a => `<tr style="border-bottom:1px solid #21262d">${td(escHtml(short(nameOf[a])), 'color:#e6edf3;white-space:nowrap')}${order.map(b => {
+        if (a === b) return td('', 'background:#161b22');
+        const r = h2h[a][b], n = r.w + r.l + r.t;
+        if (!n) return td('—', 'color:#30363d;text-align:center');
+        const col = r.w > r.l ? '#3fb950' : r.l > r.w ? '#f85149' : '#e8b55a';
+        return td(_tsRec(r.w, r.l, r.t), `color:${col};font-weight:700;text-align:center`);
+      }).join('')}${td(h2hTot[a].n ? _tsRec(h2hTot[a].w, h2hTot[a].l, h2hTot[a].t) : '—', 'font-weight:700;text-align:center')}</tr>`).join(''))
+      + (h2hNotes.length ? `<div style="margin-top:8px;font-size:0.78rem;color:#c9d1d9;line-height:1.6">${h2hNotes.map(escHtml).join('<br>')}</div>` : '')
+      : '<div style="color:#8b949e;font-size:0.82rem">None of these teams have played each other this season — every matchup is a true unknown.</div>');
+
+  const coHTML = sec('🔄 Common Opponents', 'Result and score vs shared opponents · green = W, red = L',
+    common.length ? tbl(th('Opponent') + order.map(id => th(escHtml(short(nameOf[id])))).join(''),
+      common.slice(0, 25).map(c => `<tr style="border-bottom:1px solid #21262d">${td(escHtml(c.name), 'color:#c9d1d9;white-space:nowrap')}${order.map(id => {
+        const gs = c.byTeam[id] || [];
+        if (!gs.length) return td('—', 'color:#30363d;text-align:center');
+        return td(gs.map(g => `<span style="color:${g.result === 'W' ? '#3fb950' : g.result === 'L' ? '#f85149' : '#8b949e'};font-weight:700">${g.result}</span> <span style="font-size:0.72rem;color:#8b949e">${g.runs_scored}-${g.runs_allowed}</span>`).join('<br>'), 'text-align:center;white-space:nowrap');
+      }).join('')}</tr>`).join(''))
+      : '<div style="color:#8b949e;font-size:0.82rem">No common opponents found this season.</div>');
+
+  const verdicts = Object.fromEntries(order.map(id => [id, verdict(id)]));
+  const trueHTML = sec('🏆 True Rank', 'Synthesizes win %, head-to-head (overrides when direct), common opponents and schedule strength',
+    order.map(id => {
+      const r = raw[id], d = rawRank[id] - trueRank[id];
+      const move = d > 0 ? `<span style="color:#3fb950;font-size:0.72rem">▲${d} vs raw</span>` : d < 0 ? `<span style="color:#f85149;font-size:0.72rem">▼${-d} vs raw</span>` : '';
+      return `<div style="display:flex;gap:12px;padding:10px 12px;margin-bottom:8px;background:#161b22;border:1px solid #30363d;border-radius:6px">
+        <div style="font-size:1.3rem;font-weight:800;color:#e8b55a;min-width:32px">${trueRank[id]}</div>
+        <div style="flex:1"><div style="font-weight:700;color:#e6edf3">${escHtml(nameOf[id])} <span style="color:#8b949e;font-weight:400;font-size:0.8rem">${_tsRec(r.w, r.l, r.t)} · ${_tsFmtPct(r.pct)}</span> ${move}</div>
+        <div style="color:#c9d1d9;font-size:0.82rem;margin-top:4px;line-height:1.45">${escHtml(verdicts[id])}</div></div></div>`;
+    }).join(''));
+
+  const takeHTML = sec('🎯 Key Takeaways', '',
+    `<ul style="margin:0;padding-left:18px;color:#c9d1d9;font-size:0.85rem;line-height:1.6">${takeaways.map(t => `<li>${escHtml(t)}</li>`).join('')}</ul>`);
+
+  const notesText =
+    'TRUE RANK\n' + order.map(id => `${trueRank[id]}. ${nameOf[id]} (${_tsRec(raw[id].w, raw[id].l, raw[id].t)}, ${_tsFmtPct(raw[id].pct)}) — ${verdicts[id]}`).join('\n') +
+    (takeaways.length ? '\n\nKEY TAKEAWAYS\n' + takeaways.map(t => '• ' + t).join('\n') : '') +
+    (alerts.length ? '\n\nFLAGS\n' + alerts.map(a => '⚠ ' + a).join('\n') : '');
+
+  return {
+    html: alertHTML + takeHTML + trueHTML + rawHTML + h2hHTML + coHTML,
+    notesText, order, verdicts
+  };
+}
+
+// Save the current tournament so it shows on the Home dashboard
+async function saveTournamentScouting(title, notes, teamIds) {
+  const row = { title, notes, sport: currentSport, season: currentSeason, team_ids: teamIds.map(Number) };
+  const cowork = getCowork();
+  if (!cowork && _sbClient) {
+    const { error } = await _sbClient.from('tournament_scouting').insert(row);
+    if (error) throw error;
+  } else if (cowork) {
+    const q = s => `'${String(s).replace(/'/g, "''")}'`;
+    await cowork.callMcpTool('mcp__062183b1-0e31-434a-b129-4ba2a01aa3a2__execute_sql', {
+      project_id: 'fzndpqbjmhwwouxktmol',
+      query: `INSERT INTO tournament_scouting (title, notes, sport, season, team_ids)
+              VALUES (${q(title)}, ${q(notes)}, ${q(currentSport)}, ${q(currentSeason)}, ARRAY[${row.team_ids.join(',')}]::bigint[])`
+    });
+  } else {
+    throw new Error('Not signed in');
+  }
+  await loadTournamentScouting();
+  if (typeof renderHomeRankingRows === 'function') { try { renderHomeRankingRows(); } catch (e) {} }
+}
+
+// Re-open a saved tournament from the Home card
+async function openSavedTournament() {
+  const t = window._savedTourney;
+  if (!t || !t.team_ids || !t.team_ids.length) return;
+  const rows = await sql(`SELECT id, name FROM teams WHERE id IN (${t.team_ids.map(Number).join(',')})`);
+  runTournamentAnalysis({ teams: rows.map(r => ({ id: String(r.id), name: r.name })), title: t.title });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 //  TOURNAMENT ANALYSIS
 // ════════════════════════════════════════════════════════════════════════════
-async function runTournamentAnalysis() {
-  const checked = [...document.querySelectorAll('#checkboxList input:checked')];
-  if (checked.length < 2) return;
-
-  const selected = checked.map(cb => ({ id: cb.value, name: cb.dataset.name }));
+async function runTournamentAnalysis(preset) {
+  let selected, tourneyTitle, doSave;
+  if (preset && preset.teams) {
+    selected = preset.teams; tourneyTitle = preset.title || 'Tournament'; doSave = false;
+  } else {
+    const checked = [...document.querySelectorAll('#checkboxList input:checked')];
+    if (checked.length < 2) return;
+    selected = checked.map(cb => ({ id: cb.value, name: cb.dataset.name }));
+    const nameEl = document.getElementById('tourneyName');
+    tourneyTitle = (nameEl && nameEl.value.trim()) ||
+      `Tournament — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+    doSave = true;
+  }
 
   closeTourneyModal();
   const panel = document.getElementById('tourneyPanel');
   const results = document.getElementById('tourneyResults');
   panel.classList.add('open');
-  document.getElementById('tourneySubtitle').textContent = selected.length + ' teams';
+  document.getElementById('tourneySubtitle').textContent = `${tourneyTitle} · ${selected.length} teams`;
   results.innerHTML = '<div class="empty-state" style="padding:40px 0">⏳ Analyzing ' + selected.length + ' teams…</div>';
 
   // ── keep reference so renderTourneyTab can use it ──
@@ -3117,7 +3477,7 @@ async function runTournamentAnalysis() {
   const idList = selected.map(t => `'${t.id}'`).join(',');
 
   // Pull all stats in parallel
-  const [gameRows, battingRows, pitchingRows, recentFormRows, oppWinRows, commonOppRows] = await Promise.all([
+  const [gameRows, battingRows, pitchingRows, recentFormRows, oppWinRows, commonOppRows, gamesAll] = await Promise.all([
     sql(`SELECT team_id,
              COUNT(*)                                    AS games,
              COUNT(*) FILTER (WHERE result = 'W')        AS wins,
@@ -3167,7 +3527,11 @@ async function runTournamentAnalysis() {
              WHERE team_id IN (${idList}) AND season='${currentSeason}' AND result IN ('W','L','T')
              GROUP BY opponent HAVING COUNT(DISTINCT team_id) >= 2
            )
-         ORDER BY g.opponent, g.team_id, g.game_date`)
+         ORDER BY g.opponent, g.team_id, g.game_date`),
+    // Every completed game for the selected teams (head-to-head + normalized common opponents)
+    sql(`SELECT team_id, game_date, opponent, result, runs_scored, runs_allowed
+         FROM games WHERE team_id IN (${idList}) AND season='${currentSeason}' AND result IN ('W','L','T')
+         ORDER BY game_date`)
   ]);
 
   // Index by team_id
@@ -3357,13 +3721,34 @@ async function runTournamentAnalysis() {
     commonHTML = `<div style="margin-top:24px;color:#8b949e;font-size:0.82rem">No common opponents found between these teams this season.</div>`;
   }
 
+  // ── Skill methodology: raw win% → H2H → common opponents → True Rank → takeaways ──
+  const skill = buildTournamentSkillAnalysis(selected, scored, gamesAll || [], oppMap);
+
   results.innerHTML = `
-    <div style="margin-bottom:16px;color:#8b949e;font-size:0.82rem">
-      Ranked by composite score · Quality wins: T1 vs >.500 · T2 vs .400–.500 · T3 vs sub-.400
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <div style="font-size:1.05rem;font-weight:800;color:#e6edf3">${escHtml(tourneyTitle)}</div>
+      <div id="tourneySaveStatus" style="margin-left:auto;font-size:0.78rem;color:#8b949e">${doSave ? '💾 Saving…' : ''}</div>
     </div>
-    ${html}
-    ${commonHTML}
+    ${skill.html}
+    <div style="margin-top:28px">
+      <div class="sec-title" style="margin-bottom:6px">📋 Team Detail — Composite Strength</div>
+      <div style="margin-bottom:12px;color:#8b949e;font-size:0.75rem">
+        Composite = win % · run diff · OBP/SLG · ERA/WHIP · Quality wins: T1 vs >.500 · T2 vs .400–.500 · T3 vs sub-.400
+      </div>
+      ${html}
+    </div>
   `;
+
+  if (doSave) {
+    const st = document.getElementById('tourneySaveStatus');
+    try {
+      await saveTournamentScouting(tourneyTitle, skill.notesText, selected.map(t => t.id));
+      if (st) { st.style.color = '#3fb950'; st.textContent = '✓ Saved to Home dashboard'; }
+    } catch (e) {
+      console.error('saveTournamentScouting error:', e);
+      if (st) { st.style.color = '#f85149'; st.textContent = '⚠ Not saved: ' + (e.message || e); }
+    }
+  }
 }
 
 function statCell(label, val) {
