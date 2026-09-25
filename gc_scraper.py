@@ -1908,7 +1908,7 @@ def _rc_open_tab(url: str):
     """Open `url` in a new Chrome tab and make it the active tab, so
     subsequent _rc_exec() calls target it without needing to re-find it."""
     script = '''
-tell application "Google Chrome"
+tell application id "com.google.Chrome"
     activate
     if (count of windows) is 0 then
         make new window
@@ -1924,7 +1924,7 @@ def _rc_exec(js: str) -> str:
     """Execute `js` in the currently active tab of the frontmost Chrome
     window and return its result (as a string)."""
     script = '''
-tell application "Google Chrome"
+tell application id "com.google.Chrome"
     set t to active tab of window 1
     return execute t javascript "%(js)s"
 end tell
@@ -1934,7 +1934,7 @@ end tell
 
 def _rc_close_active_tab():
     try:
-        _run_osascript('tell application "Google Chrome" to close active tab of window 1')
+        _run_osascript('tell application id "com.google.Chrome" to close active tab of window 1')
     except Exception:
         pass
 
@@ -2104,16 +2104,27 @@ def ensure_real_chrome_signed_in():
         "timeout": 20,
         "authed_js": _gc_signed_in_js(),
     }
-    def _check() -> bool:
+    def _check():
+        """True/False = definite answer from the page; None = couldn't control Chrome."""
         try:
             return bool(json.loads(_run_osascript(script)).get("authed"))
         except Exception as e:
             print(f"[auth] Real Chrome check error: {e}")
-            return False
-    if _check():
+            return None
+    state = _check()
+    if state is None:
+        time.sleep(5)
+        state = _check()
+    if state is None:
+        # Never treat "couldn't check" as "signed out" — relogin would clear a good session.
+        raise GCSignedOutError(
+            "Couldn't control Chrome via AppleScript to verify the GameChanger session "
+            "(is Chrome running, and View > Developer > Allow JavaScript from Apple Events on?). "
+            "Nothing was scraped.")
+    if state:
         print("[auth] ✓ Real Chrome is signed in to GameChanger.")
         return True
-    if attempt_real_chrome_relogin() and _check():
+    if attempt_real_chrome_relogin() and _check() is True:
         print("[auth] ✓ Real Chrome signed back in to GameChanger.")
         return True
     raise GCSignedOutError(
@@ -2162,7 +2173,7 @@ def _looks_signed_out(raw: str) -> bool:
 
 
 _REAL_CHROME_JS_TEMPLATE = r'''
-tell application "Google Chrome"
+tell application id "com.google.Chrome"
     activate
     if (count of windows) is 0 then
         make new window

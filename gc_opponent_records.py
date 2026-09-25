@@ -79,7 +79,7 @@ def season_label(season_obj):
 
 
 _SEARCH_SCRIPT = r'''
-tell application "Google Chrome"
+tell application id "com.google.Chrome"
     if (count of windows) is 0 then
         make new window
     end if
