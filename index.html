@@ -3145,7 +3145,7 @@ const _tsPct = (w, l, t) => (w + l + t) ? (w + 0.5 * t) / (w + l + t) : 0;
 const _tsFmtPct = p => p.toFixed(3).replace(/^0/, '');
 const _tsRec = (w, l, t) => `${w}-${l}${t ? '-' + t : ''}`;
 
-function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap) {
+function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap, oppRecRows, trackedRecRows) {
   const ids = selected.map(t => String(t.id));
   const nameOf = Object.fromEntries(selected.map(t => [String(t.id), t.name]));
   const short = n => {
@@ -3270,17 +3270,47 @@ function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap) {
     });
   });
 
-  // ── Strength of schedule from opponents' win% (all tracked games) ──
+  // ── Strength of schedule — each opponent's REAL season record ──
+  // Priority: opponent_records (scraped from the opponent's own GameChanger page)
+  //        → a team we track (its own games) → games vs our tracked teams (oppMap).
+  // The game vs the team being rated is removed from the opponent's record.
+  const oppRec = {};
+  (oppRecRows || []).forEach(r => { if (r.wins != null) oppRec[r.opponent_name] = { w: +r.wins, l: +r.losses, t: +r.ties || 0 }; });
+  const tracked = (trackedRecRows || []).map(r => ({ name: r.name, w: +r.w, l: +r.l, t: +r.t }));
+  const fallbackOwp = {};
+  Object.values(oppMap || {}).flat().forEach(r => {
+    if (r.opp_wpct != null && +r.total_games >= 3) fallbackOwp[r.opponent] = +r.opp_wpct;
+  });
+  const recFor = name => {
+    if (oppRec[name]) return oppRec[name];
+    const tr = tracked.find(x => _tsSameTeam(x.name, name) || _tsSameTeam(name, x.name));
+    return tr || null;
+  };
+  let sosCoverage = { known: 0, total: 0 };
   const sos = {};
   ids.forEach(id => {
-    const rows = (oppMap[id] || []).filter(r => r.opp_wpct != null && +r.total_games >= 3);
-    const qW = rows.filter(r => r.result === 'W' && +r.opp_wpct > 0.5).map(r => r);
-    const badL = rows.filter(r => r.result === 'L' && +r.opp_wpct < 0.4);
+    const rows = [];
+    byTeam[id].forEach(g => {
+      if (/^tbd/i.test(g.opponent || '')) return;
+      sosCoverage.total++;
+      const rec = recFor(g.opponent);
+      let owp = null, on = 0;
+      if (rec) {
+        let w = rec.w, l = rec.l, t = rec.t;
+        if (g.result === 'W') l = Math.max(0, l - 1); else if (g.result === 'L') w = Math.max(0, w - 1); else if (g.result === 'T') t = Math.max(0, t - 1);
+        on = w + l + t;
+        if (on > 0) owp = (w + 0.5 * t) / on;
+      } else if (fallbackOwp[g.opponent] != null) { owp = fallbackOwp[g.opponent]; on = 3; }
+      if (owp == null) return;
+      sosCoverage.known++;
+      rows.push({ opponent: g.opponent, result: g.result, runs_scored: g.runs_scored, runs_allowed: g.runs_allowed, opp_wpct: owp, n: on });
+    });
+    const q = rows.filter(r => r.n >= 3);
     sos[id] = {
-      avg: rows.length ? rows.reduce((s, r) => s + +r.opp_wpct, 0) / rows.length : null,
+      avg: rows.length ? rows.reduce((a, r) => a + r.opp_wpct, 0) / rows.length : null,
       n: rows.length,
-      qualityWins: qW.sort((x, y) => y.opp_wpct - x.opp_wpct),
-      badLosses: badL
+      qualityWins: q.filter(r => r.result === 'W' && r.opp_wpct > 0.5).sort((x, y) => y.opp_wpct - x.opp_wpct),
+      badLosses: q.filter(r => r.result === 'L' && r.opp_wpct < 0.4)
     };
   });
 
@@ -3294,7 +3324,7 @@ function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap) {
     const h = h2hTot[id].n ? (h2hTot[id].w + 0.5 * h2hTot[id].t + 1) / (h2hTot[id].n + 2) : 0.5 + (adjPct - 0.5) * 0.5;
     const c = coRel[id].n ? Math.min(1, Math.max(0, 0.5 + (coRel[id].sum / coRel[id].n) / 12)) : 0.5;
     const s = sos[id].avg != null ? sos[id].avg : 0.5;
-    let score = 0.30 * adjPct + 0.25 * h + 0.15 * c + 0.15 * s + 0.15 * ((compOf[id] || 0) / 100);
+    let score = 0.25 * adjPct + 0.25 * h + 0.15 * c + 0.25 * s + 0.10 * ((compOf[id] || 0) / 100);
     if (r.n && r.up / r.n >= 0.3) score += 0.03;
     if (r.n && r.down / r.n >= 0.3) score -= 0.05;
     if (!r.n) score = -1;
@@ -3387,13 +3417,14 @@ function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap) {
 
   const alertHTML = alerts.length ? `<div style="background:#3b2a0a;border:1px solid #e8b55a;border-radius:6px;padding:10px 14px;margin-bottom:8px;font-size:0.8rem;color:#f0d9a8">⚠️ ${alerts.map(escHtml).join('<br>⚠️ ')}</div>` : '';
 
-  const rawHTML = sec('📊 Raw Ranking — Win %', 'Ties count as ½ win',
-    tbl(th('#') + th('Team') + th('Record') + th('Win %') + th('Run Diff/G'),
+  const rawHTML = sec('📊 Raw Ranking — Win %', `Ties count as ½ win · Opp Win % = opponents' real season records (red = tough schedule, green = soft) · records found for ${sosCoverage.known} of ${sosCoverage.total} games`,
+    tbl(th('#') + th('Team') + th('Record') + th('Win %') + th('Run Diff/G') + th('Opp Win % (SoS)'),
       rawOrder.map((id, i) => {
         const r = raw[id];
         return `<tr style="border-bottom:1px solid #21262d">${td(i + 1)}${td(escHtml(nameOf[id]), 'color:#e6edf3')}${td(_tsRec(r.w, r.l, r.t))}
           ${td(`<div style="display:flex;align-items:center;gap:6px"><div style="height:8px;width:${Math.round(r.pct * 90)}px;background:#e8b55a;border-radius:4px"></div>${_tsFmtPct(r.pct)}</div>`)}
-          ${td((r.rd > 0 ? '+' : '') + r.rd.toFixed(1), `color:${r.rd >= 0 ? '#3fb950' : '#f85149'}`)}</tr>`;
+          ${td((r.rd > 0 ? '+' : '') + r.rd.toFixed(1), `color:${r.rd >= 0 ? '#3fb950' : '#f85149'}`)}
+          ${td(sos[id].avg != null ? _tsFmtPct(sos[id].avg) : '—', `color:${sos[id].avg == null ? '#8b949e' : sos[id].avg >= 0.55 ? '#f85149' : sos[id].avg < 0.45 ? '#3fb950' : '#c9d1d9'}`)}</tr>`;
       }).join('')));
 
   const h2hHTML = sec('⚔️ Head-to-Head', h2hGames.length ? 'Row team\'s record vs column team this season' : '',
@@ -3418,7 +3449,7 @@ function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap) {
       : '<div style="color:#8b949e;font-size:0.82rem">No common opponents found this season.</div>');
 
   const verdicts = Object.fromEntries(order.map(id => [id, verdict(id)]));
-  const trueHTML = sec('🏆 True Rank', 'Synthesizes win %, head-to-head (overrides when direct), common opponents and schedule strength',
+  const trueHTML = sec('🏆 True Rank', 'Weights: win % 25 · head-to-head 25 (overrides when direct) · strength of schedule 25 · common opponents 15 · stats 10',
     order.map(id => {
       const r = raw[id], d = rawRank[id] - trueRank[id];
       const move = d > 0 ? `<span style="color:#3fb950;font-size:0.72rem">▲${d} vs raw</span>` : d < 0 ? `<span style="color:#f85149;font-size:0.72rem">▼${-d} vs raw</span>` : '';
@@ -3500,7 +3531,7 @@ async function runTournamentAnalysis(preset) {
   const idList = selected.map(t => `'${t.id}'`).join(',');
 
   // Pull all stats in parallel
-  const [gameRows, battingRows, pitchingRows, recentFormRows, oppWinRows, commonOppRows, gamesAll] = await Promise.all([
+  const [gameRows, battingRows, pitchingRows, recentFormRows, oppWinRows, commonOppRows, gamesAll, oppRecRows, trackedRecRows] = await Promise.all([
     sql(`SELECT team_id,
              COUNT(*)                                    AS games,
              COUNT(*) FILTER (WHERE result = 'W')        AS wins,
@@ -3554,7 +3585,15 @@ async function runTournamentAnalysis(preset) {
     // Every completed game for the selected teams (head-to-head + normalized common opponents)
     sql(`SELECT team_id, game_date, opponent, result, runs_scored, runs_allowed
          FROM games WHERE team_id IN (${idList}) AND season='${currentSeason}' AND result IN ('W','L','T')
-         ORDER BY game_date`)
+         ORDER BY game_date`),
+    // Opponents' real season records (gc_opponent_records.py) for strength of schedule
+    sql(`SELECT opponent_name, wins, losses, ties FROM opponent_records
+         WHERE season='${currentSeason}' AND wins IS NOT NULL`).catch(() => []),
+    sql(`SELECT t.name,
+                COUNT(*) FILTER (WHERE g.result='W') AS w, COUNT(*) FILTER (WHERE g.result='L') AS l,
+                COUNT(*) FILTER (WHERE g.result='T') AS t
+         FROM games g JOIN teams t ON t.id=g.team_id
+         WHERE g.season='${currentSeason}' AND g.result IN ('W','L','T') GROUP BY t.name`)
   ]);
 
   // Index by team_id
@@ -3745,7 +3784,7 @@ async function runTournamentAnalysis(preset) {
   }
 
   // ── Skill methodology: raw win% → H2H → common opponents → True Rank → takeaways ──
-  const skill = buildTournamentSkillAnalysis(selected, scored, gamesAll || [], oppMap);
+  const skill = buildTournamentSkillAnalysis(selected, scored, gamesAll || [], oppMap, oppRecRows || [], trackedRecRows || []);
 
   results.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">

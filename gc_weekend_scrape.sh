@@ -37,4 +37,11 @@ echo "========================================" >> "$LOG"
   --since-date "$SINCE_DATE" \
   2>&1 | tee -a "$LOG"
 
+# ── Opponents' real records for strength of schedule (Scout a Tourney) ──
+echo "Opponent records started: $(date)" >> "$LOG"
+/opt/homebrew/bin/python3 -u \
+  "$SCRIPT_DIR/gc_opponent_records.py" \
+  --all-teams --season "Fall 2026" --max-age-hours 24 \
+  2>&1 | tee -a "$LOG"
+
 echo "Run finished: $(date)" >> "$LOG"

@@ -950,8 +950,32 @@ GC_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".gc_st
 GC_STATE_MAX_AGE_MINUTES = 360  # re-verify (not necessarily re-login) after this long
 
 
+def _gc_signed_in_js() -> str:
+    """JS expression (single quotes only — it's embedded in AppleScript strings)
+    that is true only when GC's page header shows the signed-in account.
+
+    Do NOT use localStorage 'eden-auth-tokens' as the signal: an expired token
+    stays in localStorage after GameChanger has signed the browser out (the API
+    then 403s /me/user and the header shows "Sign In / Join Us"), so a token
+    check reports "signed in" while every page serves logged-out/decoy data."""
+    email = (os.getenv("GC_EMAIL") or "").lower().replace("'", "")
+    if email:
+        return f"(document.body.innerText.toLowerCase().indexOf('{email}') > -1)"
+    return ("(!(document.body.innerText.indexOf('Sign In') > -1 && "
+            "document.body.innerText.indexOf('Join Us') > -1))")
+
+
+def _gc_header_ready_js() -> str:
+    """True once GC's header has rendered either the account or the Sign In/Join Us buttons."""
+    return f"({_gc_signed_in_js()} || document.body.innerText.indexOf('Join Us') > -1)"
+
+
 def _has_gc_session_token(page: Page) -> bool:
-    """True if the page's localStorage holds a GameChanger auth token."""
+    """True if the Playwright page's localStorage holds a GameChanger auth token.
+
+    Playwright is only used for schedule/roster discovery, and GameChanger 403s
+    /me/user for Playwright's bundled Chromium even with a valid token, so the
+    header check used for the real Chrome (_gc_signed_in_js) can't be used here."""
     try:
         return bool(page.evaluate("() => !!localStorage.getItem('eden-auth-tokens')"))
     except Exception:
@@ -960,6 +984,15 @@ def _has_gc_session_token(page: Page) -> bool:
 
 def ensure_authenticated_state(pw, timeout: int, email: str = None, password: str = None,
                                 state_file: str = None, max_age_minutes: int = None) -> str:
+    """Playwright saved-session check (schedules/rosters) + a hard preflight that the
+    user's real Chrome — used for box scores and plays — is genuinely signed in."""
+    path = _ensure_playwright_state(pw, timeout, email, password, state_file, max_age_minutes)
+    ensure_real_chrome_signed_in()
+    return path
+
+
+def _ensure_playwright_state(pw, timeout: int, email: str = None, password: str = None,
+                             state_file: str = None, max_age_minutes: int = None) -> str:
     """
     Return a path to a .gc_state.json known to hold a live GameChanger
     session, refreshing it if needed. The refresh (login) step always runs
@@ -1937,6 +1970,13 @@ def attempt_real_chrome_relogin() -> bool:
         })()''' % {"email": _json.dumps(gc_email)}
         r1 = _rc_exec(email_js)
         if "no-field" in r1:
+            # A stale/expired token in localStorage can keep GC from showing the
+            # sign-in form — clear it and reload the root once before anything else.
+            print("[relogin] No email field — clearing stale GC token and reloading …")
+            _rc_exec("localStorage.removeItem('eden-auth-tokens'); location.href='https://web.gc.com/'; 'ok'")
+            time.sleep(5)
+            r1 = _rc_exec(email_js)
+        if "no-field" in r1:
             print("[relogin] No email field on landing page — looking for a Sign In link …")
             click_signin_js = '''(function(){
                 var el = Array.from(document.querySelectorAll("a,button")).find(function(b){return /sign in|log in/i.test(b.innerText);});
@@ -2007,9 +2047,17 @@ def attempt_real_chrome_relogin() -> bool:
             _rc_exec(code_js)
             time.sleep(3)
 
-        # Step 4: verify we actually landed a session token
-        token_check = _rc_exec("!!localStorage.getItem('eden-auth-tokens')")
-        signed_in = "true" in token_check.lower()
+        # Step 4: verify the page header now shows the signed-in account
+        signed_in, token_check = False, ""
+        for _ in range(10):
+            time.sleep(1.5)
+            try:
+                token_check = _rc_exec(_gc_signed_in_js())
+            except Exception as e:
+                token_check = str(e)
+            if "true" in token_check.lower():
+                signed_in = True
+                break
         if signed_in:
             print("[relogin] ✓ Real Chrome re-authenticated to GameChanger.")
         else:
@@ -2024,6 +2072,37 @@ def attempt_real_chrome_relogin() -> bool:
         except Exception:
             pass
         return False
+
+
+def ensure_real_chrome_signed_in():
+    """Hard preflight before any box score/plays fetch: open GameChanger in the
+    user's real Chrome and confirm the header shows the account. If not, auto
+    re-login (email + password + Gmail OTP). Raises GCSignedOutError if Chrome
+    still isn't signed in, so a run never silently saves logged-out/decoy data."""
+    print("[auth] Checking the real Chrome GameChanger session …")
+    script = _REAL_CHROME_JS_TEMPLATE % {
+        "url": "https://web.gc.com/teams",
+        # Wait for the ACCOUNT to appear (not just any header): GC paints the
+        # logged-out "Sign In / Join Us" header first, then swaps in the account.
+        "ready_js": _gc_signed_in_js(),
+        "timeout": 20,
+        "authed_js": _gc_signed_in_js(),
+    }
+    def _check() -> bool:
+        try:
+            return bool(json.loads(_run_osascript(script)).get("authed"))
+        except Exception as e:
+            print(f"[auth] Real Chrome check error: {e}")
+            return False
+    if _check():
+        print("[auth] ✓ Real Chrome is signed in to GameChanger.")
+        return True
+    if attempt_real_chrome_relogin() and _check():
+        print("[auth] ✓ Real Chrome signed back in to GameChanger.")
+        return True
+    raise GCSignedOutError(
+        "Real Chrome is NOT signed in to GameChanger and auto re-login failed — "
+        "sign in at https://web.gc.com in Chrome, then re-run. Nothing was scraped.")
 
 
 # GameChanger silently serves DIFFERENT (wrong) box-score data — a decoy
@@ -2102,7 +2181,7 @@ tell application "Google Chrome"
     -- you" teaser copy on plenty of pages (future games, restricted
     -- previews) even while genuinely signed in, so page text alone is not
     -- a reliable signed-out signal. localStorage's eden-auth-tokens is.
-    set pageBundle to execute newTab javascript "JSON.stringify({text: document.body.innerText, authed: !!localStorage.getItem('eden-auth-tokens')})"
+    set pageBundle to execute newTab javascript "JSON.stringify({text: document.body.innerText, authed: %(authed_js)s})"
     -- Pause before closing so any in-flight auth token refresh (fired on
     -- page load) has time to finish and persist before the tab is torn
     -- down — closing too fast may be killing refreshes mid-flight and
@@ -2134,6 +2213,7 @@ def fetch_page_text_via_real_chrome(url: str, ready_js: str, timeout: int = 25,
         "url": url.replace('"', '\\"'),
         "ready_js": ready_js.replace('"', '\\"'),
         "timeout": int(timeout),
+        "authed_js": _gc_signed_in_js(),
     }
     bundle_raw = _run_osascript(script)
     try:
@@ -2145,7 +2225,7 @@ def fetch_page_text_via_real_chrome(url: str, ready_js: str, timeout: int = 25,
         # fall back to treating the whole thing as page text, unauthenticated.
         raw, authed = bundle_raw, False
 
-    if _looks_signed_out(raw) and not authed:
+    if not authed:
         if _retry and attempt_real_chrome_relogin():
             print(f"[relogin] Retrying fetch: {url}")
             return fetch_page_text_via_real_chrome(url, ready_js, timeout=timeout, _retry=False)
