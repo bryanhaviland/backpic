@@ -3125,9 +3125,13 @@ function _tsTokens(name) {
     .replace(/[^a-z0-9]+/g, ' ').split(' ')
     .filter(w => w && !/^\d{1,2}u$/.test(w) && !_TS_STOP.has(w));
 }
+// Divisions are even-numbered (8U/10U/12U/14U…). Odd labels like "11U" are a team's
+// birth-year label, not a division — they compete in the next even division (11U → 12U).
 function _tsAge(name) {
   const m = String(name || '').match(/\b(\d{1,2})\s*u\b/i);
-  return m ? parseInt(m[1], 10) : null;
+  if (!m) return null;
+  const a = parseInt(m[1], 10);
+  return a % 2 ? a + 1 : a;
 }
 // Does a free-text opponent name refer to tournament team `teamName`?
 function _tsSameTeam(teamName, oppName) {
