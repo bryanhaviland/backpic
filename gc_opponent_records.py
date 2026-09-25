@@ -19,8 +19,8 @@ Usage:
   python3 gc_opponent_records.py --all-teams --max-age-hours 24
 
 Needs .env (SUPABASE_URL, SUPABASE_KEY, GC_EMAIL, GC_PASSWORD, GMAIL_APP_PASSWORD).
-Opens a visible Chrome window (GameChanger search requires a signed-in session and
-blocks headless/bundled Chromium).
+Uses your real, signed-in Chrome via AppleScript for GameChanger search (no extra
+login); records come from GameChanger's public team API.
 """
 
 import argparse
@@ -35,7 +35,6 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gc_scraper as g  # noqa: E402  (loads .env, login(), SupabaseClient)
-from playwright.sync_api import sync_playwright  # noqa: E402
 
 API = "https://api.team-manager.gc.com"
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140 Safari/537.36"
@@ -75,42 +74,71 @@ def season_label(season_obj):
     """{'name':'fall','year':2026} -> 'Fall 2026'"""
     if not season_obj:
         return None
-    return f"{str(season_obj.get('name', '')).title()} {season_obj.get('year', '')}".strip()
+    nm = season_obj.get("name") or season_obj.get("season") or ""
+    return f"{str(nm).title()} {season_obj.get('year', '')}".strip()
+
+
+_SEARCH_SCRIPT = r'''
+tell application "Google Chrome"
+    if (count of windows) is 0 then
+        make new window
+    end if
+    set newTab to make new tab at end of tabs of window 1 with properties {URL:"%(url)s"}
+    set deadline to (current date) + 20
+    set out to "[]"
+    repeat
+        delay 1
+        try
+            set ready to execute newTab javascript "document.readyState === 'complete' && (document.querySelectorAll('a[href*=\\'/teams/\\']').length > 3 || document.body.innerText.indexOf('No results') > -1)"
+        on error
+            set ready to false
+        end try
+        if ready then exit repeat
+        if (current date) > deadline then exit repeat
+    end repeat
+    delay 1
+    try
+        set out to execute newTab javascript "JSON.stringify(Array.from(document.querySelectorAll('a[href*=\\'/teams/\\']')).map(function(a){return [a.getAttribute('href'), a.innerText];}))"
+    end try
+    close newTab
+    return out
+end tell
+'''
 
 
 class Searcher:
-    """Runs GameChanger team searches through the signed-in web UI and captures the API hits."""
+    """GameChanger team search through the user's real, already-signed-in Chrome
+    (AppleScript — no Playwright, no extra login). Returns hits shaped like the
+    GC search API: {public_id, name, sport, season:{name,year}, location:{city,state}}."""
 
-    def __init__(self, page):
-        self.page = page
-        self._hits = None
-        page.on("response", self._on_resp)
-
-    def _on_resp(self, r):
-        if r.request.method == "POST" and "/search?" in r.url and "api.team-manager.gc.com" in r.url:
-            try:
-                self._hits = r.json().get("hits", [])
-            except Exception:
-                self._hits = []
-
-    def search(self, name, timeout=20):
-        self._hits = None
-        self.page.goto("https://web.gc.com/search?search=" + urllib.parse.quote(name), timeout=60000)
-        t0 = time.time()
-        while self._hits is None and time.time() - t0 < timeout:
-            self.page.wait_for_timeout(500)
-        if self._hits is None:  # URL param didn't trigger — type into the box
-            try:
-                box = self.page.locator("input").first
-                box.fill("")
-                box.type(name, delay=40)
-                self.page.keyboard.press("Enter")
-                t0 = time.time()
-                while self._hits is None and time.time() - t0 < timeout:
-                    self.page.wait_for_timeout(500)
-            except Exception as e:
-                log(f"  search box error: {e}")
-        return [h["result"] for h in (self._hits or []) if h.get("type") == "team"]
+    def search(self, name):
+        url = "https://web.gc.com/search?search=" + urllib.parse.quote(name)
+        raw = g._run_osascript(_SEARCH_SCRIPT % {"url": url})
+        try:
+            links = json.loads(raw)
+        except Exception:
+            return []
+        hits, seen = [], set()
+        for href, text in links:
+            m = re.match(r"^/teams/([A-Za-z0-9]{8,16})(?:/|$)", href or "")
+            if not m or m.group(1) in seen:
+                continue
+            lines = [x.strip() for x in (text or "").split("\n") if x.strip()]
+            if len(lines) < 2:
+                continue
+            meta = lines[1]  # e.g. "Fall 2026 • Avon Park, FL • Staff: … • 13 players"
+            parts = [x.strip() for x in meta.split("•")]
+            sm = re.match(r"(?i)(spring|summer|fall|winter)\s+(\d{4})", parts[0] if parts else "")
+            loc = parts[1] if len(parts) > 1 else ""
+            city, _, state = loc.rpartition(",")
+            seen.add(m.group(1))
+            hits.append({
+                "public_id": m.group(1), "name": lines[0],
+                "sport": "softball",  # verified below via the public team API
+                "season": {"name": sm.group(1).lower(), "year": int(sm.group(2))} if sm else None,
+                "location": {"city": city.strip(), "state": state.strip()},
+            })
+        return hits
 
 
 def resolve_opponent(searcher, opp_name, seed_name, game_dates, season, state_pref="FL"):
@@ -118,8 +146,6 @@ def resolve_opponent(searcher, opp_name, seed_name, game_dates, season, state_pr
     want_season = season.lower()
     cands = []
     for r in searcher.search(opp_name):
-        if str(r.get("sport", "")).lower() != "softball":
-            continue
         if (season_label(r.get("season")) or "").lower() != want_season:
             continue
         if not same_team(r.get("name", ""), opp_name) and not same_team(opp_name, r.get("name", "")):
@@ -155,7 +181,6 @@ def main():
     ap.add_argument("--all-teams", action="store_true", help="Seed with every tracked team that has games this season")
     ap.add_argument("--season", default="Fall 2026")
     ap.add_argument("--max-age-hours", type=float, default=12, help="Skip opponents refreshed more recently than this")
-    ap.add_argument("--timeout", type=int, default=60000)
     args = ap.parse_args()
 
     sb = g.SupabaseClient(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
@@ -204,42 +229,40 @@ def main():
     log(f"{len(opps)} opponents found, {len(todo)} to look up ({len(fresh)} fresh)")
 
     out_rows, misses = [], []
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False, channel="chrome",
-                                     args=["--disable-blink-features=AutomationControlled"])
-        ctx = browser.new_context(viewport={"width": 1280, "height": 900})
-        page = ctx.new_page()
-        g.login(page, args.timeout, os.getenv("GC_EMAIL"), os.getenv("GC_PASSWORD"))
-        searcher = Searcher(page)
-        for i, name in enumerate(todo, 1):
-            info = opps[name]
-            try:
-                hit, how = resolve_opponent(searcher, name, info["seed"], info["dates"], args.season)
-            except Exception as e:
-                hit, how = None, f"error: {e}"
-            if not hit:
-                log(f"[{i}/{len(todo)}] ✗ {name} — {how}")
-                misses.append(name)
-                continue
-            try:
-                t = public_get(f"/public/teams/{hit['public_id']}")
-                rec = (t.get("team_season") or {}).get("record") or {}
-            except Exception as e:
-                log(f"[{i}/{len(todo)}] ✗ {name} — record fetch error {e}")
-                continue
-            row = {
-                "opponent_name": name, "season": args.season,
-                "gc_public_id": hit["public_id"], "gc_name": t.get("name"),
-                "city": (t.get("location") or {}).get("city"), "state": (t.get("location") or {}).get("state"),
-                "age_group": t.get("age_group"),
-                "wins": rec.get("win", 0), "losses": rec.get("loss", 0), "ties": rec.get("tie", 0),
-                "match_method": how, "scraped_at": datetime.now(timezone.utc).isoformat(),
-            }
-            out_rows.append(row)
-            log(f"[{i}/{len(todo)}] ✓ {name} → {row['gc_name']} ({row['city']}, {row['state']}) "
-                f"{row['wins']}-{row['losses']}-{row['ties']} [{how}]")
-            time.sleep(0.8)
-        browser.close()
+    if not g.ensure_real_chrome_signed_in():
+        return
+    searcher = Searcher()
+    for i, name in enumerate(todo, 1):
+        info = opps[name]
+        try:
+            hit, how = resolve_opponent(searcher, name, info["seed"], info["dates"], args.season)
+        except Exception as e:
+            hit, how = None, f"error: {e}"
+        if not hit:
+            log(f"[{i}/{len(todo)}] ✗ {name} — {how}")
+            misses.append(name)
+            continue
+        try:
+            t = public_get(f"/public/teams/{hit['public_id']}")
+            rec = (t.get("team_season") or {}).get("record") or {}
+        except Exception as e:
+            log(f"[{i}/{len(todo)}] ✗ {name} — record fetch error {e}")
+            continue
+        if str(t.get("sport", "softball")).lower() != "softball":
+            log(f"[{i}/{len(todo)}] ✗ {name} — matched a non-softball team, skipping")
+            misses.append(name)
+            continue
+        row = {
+            "opponent_name": name, "season": args.season,
+            "gc_public_id": hit["public_id"], "gc_name": t.get("name"),
+            "city": (t.get("location") or {}).get("city"), "state": (t.get("location") or {}).get("state"),
+            "age_group": t.get("age_group"),
+            "wins": rec.get("win", 0), "losses": rec.get("loss", 0), "ties": rec.get("tie", 0),
+            "match_method": how, "scraped_at": datetime.now(timezone.utc).isoformat(),
+        }
+        out_rows.append(row)
+        log(f"[{i}/{len(todo)}] ✓ {name} → {row['gc_name']} ({row['city']}, {row['state']}) "
+            f"{row['wins']}-{row['losses']}-{row['ties']} [{how}]")
 
     if out_rows:
         # Normalize keys so every row in the batch has the same columns (PostgREST requirement)
