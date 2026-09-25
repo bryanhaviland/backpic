@@ -3195,6 +3195,7 @@ function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap, oppRec
   // ── Step 4: head-to-head ──
   const h2hGames = [];
   const seen = new Set();
+  const suspect = new Set(); // games whose listed opponent the other team's schedule contradicts
   ids.forEach(a => byTeam[a].forEach(g => {
     const b = ids.find(x => x !== a && _tsSameTeam(nameOf[x], g.opponent));
     if (!b) return;
@@ -3203,7 +3204,7 @@ function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap, oppRec
     const bSameDay = byTeam[b].filter(x => x.game_date === g.game_date);
     const corroborated = bSameDay.some(x => _tsSameTeam(nameOf[a], x.opponent) ||
       (+x.runs_scored === +g.runs_allowed && +x.runs_allowed === +g.runs_scored)); // e.g. listed as "TBD" but same score
-    if (bSameDay.length && !corroborated) return;
+    if (bSameDay.length && !corroborated) { suspect.add(`${a}|${g.game_date}|${g.opponent}`); return; }
     const pair = [a, b].sort().join('|');
     const scoreKey = [+g.runs_scored || 0, +g.runs_allowed || 0].sort((x, y) => x - y).join('-');
     const key = `${pair}|${g.game_date}|${scoreKey}`;
@@ -3293,6 +3294,7 @@ function buildTournamentSkillAnalysis(selected, scored, gamesAll, oppMap, oppRec
     const rows = [];
     byTeam[id].forEach(g => {
       if (/^tbd/i.test(g.opponent || '')) return;
+      if (suspect.has(`${id}|${g.game_date}|${g.opponent}`)) return; // opponent is mislabeled — unknown strength
       sosCoverage.total++;
       const rec = recFor(g.opponent);
       let owp = null, on = 0;

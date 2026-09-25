@@ -209,7 +209,7 @@ def main():
         log(f"seed {team.get('name')}: {len(games)} games")
         for gm in games:
             name = (gm.get("opponent_team") or {}).get("name")
-            if not name or re.match(r"(?i)^tbd", name):
+            if not name or re.match(r"(?i)^tbd", name) or " @ " in name:  # "NSA @ New Tampa" = tournament placeholder
                 continue
             o = opps.setdefault(name, {"seed": team.get("name", ""), "dates": set()})
             o["dates"].add(str(gm.get("start_ts", ""))[:10])
