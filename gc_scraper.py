@@ -465,6 +465,22 @@ def _parse_game_date(full_date_raw: str, month_year: str = "") -> Optional[str]:
     return _try(full_date_raw) or _try(month_year)
 
 
+_EXCLUDED_EVENTS = None
+
+
+def excluded_event_ids(sb) -> set:
+    """GC event IDs to ignore completely (scrimmages etc.) — table excluded_games.
+    Excluded games are never written to Supabase or counted anywhere."""
+    global _EXCLUDED_EVENTS
+    if _EXCLUDED_EVENTS is None:
+        try:
+            _EXCLUDED_EVENTS = {r["gc_event_id"] for r in sb.select("excluded_games", {}, columns="gc_event_id")}
+        except Exception as e:
+            print(f"[excluded] couldn't load excluded_games ({e}) — excluding nothing")
+            _EXCLUDED_EVENTS = set()
+    return _EXCLUDED_EVENTS
+
+
 def upsert_game(sb: SupabaseClient, team_id: int, g: dict) -> int:
     game_date = _parse_game_date(
         g.get("full_date_raw", ""),
@@ -2980,6 +2996,9 @@ def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
         event_id     = g["gc_event_id"]
         scouted_home = g.get("home_away") == "home"
         print(f"\n[game] {event_id}")
+        if event_id in excluded_event_ids(sb):
+            print(f"[game] {event_id} — in excluded_games (scrimmage/ignored), skipping")
+            continue
 
         # Skip if already fully scraped — check for existing plays in DB
         if event_id in _existing_games:

@@ -47,6 +47,7 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from gc_scraper import (
+    excluded_event_ids,
     SupabaseClient,
     login,
     ensure_authenticated_state,
@@ -141,6 +142,9 @@ def process_game(sb, page, db_team_id, gc_team_id, team_name, g,
     """Scrape one game and write stats to DB. Returns True on success."""
     event_id     = g["gc_event_id"]
     scouted_home = g.get("home_away") == "home"
+    if event_id in excluded_event_ids(sb):
+        print(f"  [game] {event_id} — in excluded_games (scrimmage/ignored), skipping")
+        return True
     print(f"  [game] {event_id}  {g.get('game_date') or g.get('date', '')}  "
           f"{g.get('result','')} {g.get('runs_scored')}-{g.get('runs_allowed')}  "
           f"vs {g.get('opponent','')}")
