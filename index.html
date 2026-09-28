@@ -1391,6 +1391,7 @@
     </div>
     <div class="modal-body">
       <input class="modal-search" id="tourneyName" placeholder="🏆 Tournament name (e.g. NSA New Tampa 12U – Sep 26)" style="margin-bottom:8px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.8rem;color:#8b949e;margin-bottom:8px">Last day of tournament <input type="date" id="tourneyEnd" class="modal-search" style="margin:0;flex:1"></label>
       <input class="modal-search" id="teamSearch" placeholder="🔍 Filter teams…" oninput="filterTeamList(this.value)">
       <div class="modal-actions">
         <button class="link-btn" onclick="selectAllTeams()">Select all</button>
@@ -1734,6 +1735,8 @@ async function loadTournamentScouting() {
       SELECT id, title, notes, created_at, team_ids, my_games
       FROM tournament_scouting
       WHERE LOWER(sport) = LOWER('${currentSport}')
+        AND NOT COALESCE(archived, false)
+        AND (end_date IS NULL OR end_date >= CURRENT_DATE - 1)
       ORDER BY created_at DESC
       LIMIT 1
     `);
@@ -1746,7 +1749,7 @@ async function loadTournamentScouting() {
       <div class="tourney-scout-card">
         <div class="tourney-scout-head">
           <div>🏆 <strong>${escHtml(r.title)}</strong></div>
-          <div class="tourney-scout-date">Saved ${updated}</div>
+          <div class="tourney-scout-date">Saved ${updated} · <a href="#" style="color:#8b949e" onclick="archiveTournament(${Number(r.id)});return false" title="Tournament's over — remove from Home">✕ Done</a></div>
         </div>
         ${(Array.isArray(r.my_games) && r.my_games.length) ? `<div style="margin:6px 0 4px;font-size:0.82rem;color:#e6edf3">⭐ <strong>Our games:</strong> ${r.my_games.map((g, i) => `${i + 1}. ${escHtml(g.time ? g.time + ' vs ' : 'vs ')}${escHtml(g.name || '')}`).join(' · ')}</div>` : ''}
         ${(r.team_ids && r.team_ids.length) ? `<button class="tourney-btn" style="margin:6px 0 10px;border-radius:6px" onclick="openSavedTournament()">📊 Open full analysis</button>` : ''}
@@ -3581,8 +3584,9 @@ async function saveOurGames() {
 }
 
 // Save the current tournament so it shows on the Home dashboard
-async function saveTournamentScouting(title, notes, teamIds) {
+async function saveTournamentScouting(title, notes, teamIds, endDate) {
   const row = { title, notes, sport: currentSport, season: currentSeason, team_ids: teamIds.map(Number) };
+  if (endDate && /^\d{4}-\d{2}-\d{2}$/.test(endDate)) row.end_date = endDate;
   let newId = null;
   const cowork = getCowork();
   if (!cowork && _sbClient) {
@@ -3593,8 +3597,8 @@ async function saveTournamentScouting(title, notes, teamIds) {
     const q = s => `'${String(s).replace(/'/g, "''")}'`;
     const res = await cowork.callMcpTool('mcp__062183b1-0e31-434a-b129-4ba2a01aa3a2__execute_sql', {
       project_id: 'fzndpqbjmhwwouxktmol',
-      query: `INSERT INTO tournament_scouting (title, notes, sport, season, team_ids)
-              VALUES (${q(title)}, ${q(notes)}, ${q(currentSport)}, ${q(currentSeason)}, ARRAY[${row.team_ids.join(',')}]::bigint[])
+      query: `INSERT INTO tournament_scouting (title, notes, sport, season, team_ids, end_date)
+              VALUES (${q(title)}, ${q(notes)}, ${q(currentSport)}, ${q(currentSeason)}, ARRAY[${row.team_ids.join(',')}]::bigint[], ${row.end_date ? q(row.end_date) + '::date' : 'NULL'})
               RETURNING id`
     });
     try { newId = (parseMcp(res)[0] || {}).id; } catch (e) {}
@@ -3604,6 +3608,27 @@ async function saveTournamentScouting(title, notes, teamIds) {
   await loadTournamentScouting();
   if (typeof renderHomeRankingRows === 'function') { try { renderHomeRankingRows(); } catch (e) {} }
   return newId;
+}
+
+// Remove a finished tournament from the Home dashboard (kept in the database)
+async function archiveTournament(id) {
+  if (!confirm('Tournament over? Remove it from the Home dashboard?')) return;
+  try {
+    const cowork = getCowork();
+    if (!cowork && _sbClient) {
+      const { error } = await _sbClient.from('tournament_scouting').update({ archived: true }).eq('id', id);
+      if (error) throw error;
+    } else if (cowork) {
+      await cowork.callMcpTool('mcp__062183b1-0e31-434a-b129-4ba2a01aa3a2__execute_sql', {
+        project_id: 'fzndpqbjmhwwouxktmol',
+        query: `UPDATE tournament_scouting SET archived = true WHERE id = ${Number(id)}`
+      });
+    }
+    await loadTournamentScouting();
+    if (typeof renderHomeRankingRows === 'function') { try { renderHomeRankingRows(); } catch (e) {} }
+  } catch (e) {
+    alert('Could not remove: ' + (e.message || e));
+  }
 }
 
 // Re-open a saved tournament from the Home card
@@ -3628,6 +3653,8 @@ async function runTournamentAnalysis(preset) {
     if (checked.length < 2) return;
     selected = checked.map(cb => ({ id: cb.value, name: cb.dataset.name }));
     const nameEl = document.getElementById('tourneyName');
+    const endEl = document.getElementById('tourneyEnd');
+    window._tourneyEndDate = (endEl && endEl.value) || null;
     tourneyTitle = (nameEl && nameEl.value.trim()) ||
       `Tournament — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
     doSave = true;
@@ -3927,7 +3954,7 @@ async function runTournamentAnalysis(preset) {
   if (doSave) {
     const st = document.getElementById('tourneySaveStatus');
     try {
-      window._tourneyCtx.tourneyId = await saveTournamentScouting(tourneyTitle, skill.notesText, selected.map(t => t.id));
+      window._tourneyCtx.tourneyId = await saveTournamentScouting(tourneyTitle, skill.notesText, selected.map(t => t.id), window._tourneyEndDate);
       if (st) { st.style.color = '#3fb950'; st.textContent = '✓ Saved to Home dashboard'; }
     } catch (e) {
       console.error('saveTournamentScouting error:', e);
