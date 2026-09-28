@@ -1910,7 +1910,7 @@ def _parse_pitching_section(lines: list[str]) -> list[dict]:
 def _run_osascript(script: str, args: list[str] = None) -> str:
     """Run an AppleScript, returning its stdout. Raises on a non-zero exit."""
     cmd = ["osascript", "-"] + (args or [])
-    proc = subprocess.run(cmd, input=script, capture_output=True, text=True, timeout=60)
+    proc = subprocess.run(cmd, input=script, capture_output=True, text=True, timeout=150)
     if proc.returncode != 0:
         raise RuntimeError(f"osascript failed: {proc.stderr.strip()}")
     return proc.stdout
@@ -2124,7 +2124,7 @@ def ensure_real_chrome_signed_in():
         # Wait for the ACCOUNT to appear (not just any header): GC paints the
         # logged-out "Sign In / Join Us" header first, then swaps in the account.
         "ready_js": _gc_signed_in_js(),
-        "timeout": 20,
+        "timeout": 60,
         "authed_js": _gc_signed_in_js(),
     }
     def _check():
