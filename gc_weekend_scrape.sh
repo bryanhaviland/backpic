@@ -44,4 +44,16 @@ echo "Opponent records started: $(date)" >> "$LOG"
   --all-teams --season "Fall 2026" --max-age-hours 24 \
   2>&1 | tee -a "$LOG"
 
+# ── Rebuild season records/aggregates so the app shows the new games now ──
+echo "Refreshing aggregates: $(date)" >> "$LOG"
+/opt/homebrew/bin/python3 - <<'PY' 2>&1 | tee -a "$LOG"
+import os, requests
+url = os.environ["SUPABASE_URL"]
+key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_KEY"]
+r = requests.post(f"{url}/rest/v1/rpc/exec_sql",
+                  headers={"apikey": key, "Authorization": "Bearer " + key},
+                  json={"query_text": "select refresh_aggregate_stats()"}, timeout=300)
+print("refresh_aggregate_stats:", r.status_code)
+PY
+
 echo "Run finished: $(date)" >> "$LOG"
