@@ -141,8 +141,32 @@ class Searcher:
         return hits
 
 
+TRACKED = {}  # normalized name key -> (gc_team_id, name); filled in main()
+
+
+def clean_name(n):
+    n = re.sub(r"\s*[-\u2013]\s*\d\d/\d\d/\d\d.*$", "", n)       # "- 09/27/26, 5:00 PM" game-time suffix
+    n = re.sub(r"\s*\([^)]*\)", "", n)                            # "(Barrie)"
+    n = re.sub(r"(?i)\b(\d{1,2}u)\b(\s+\1\b)+", r"\1", n)        # "12U 12U"
+    n = re.sub(r"[^\w\s&/'.-]", "", n)                              # emoji
+    return re.sub(r"\s+", " ", n).strip(" -")
+
+
+def tracked_key(n):
+    n = clean_name(n).lower().replace("&", " and ")
+    return " ".join(sorted(w for w in re.sub(r"[^a-z0-9 ]", " ", n).split() if w not in ("and",) and not re.fullmatch(r"\d{1,2}u", w)))
+
+
 def resolve_opponent(searcher, opp_name, seed_name, game_dates, season, state_pref="FL"):
     """Find the opponent's GC team: same season, softball, name match; verify via its schedule."""
+    hit = TRACKED.get(tracked_key(opp_name))
+    if hit:  # opponent is one of our own tracked teams (name variant) -> use its known GC id directly
+        return {"public_id": hit[0], "name": hit[1]}, "tracked_team"
+    cn = clean_name(opp_name)
+    if cn and cn != opp_name:
+        r, how = resolve_opponent(searcher, cn, seed_name, game_dates, season, state_pref)
+        if r:
+            return r, how + "_cleaned"
     want_season = season.lower()
     cands = []
     for r in searcher.search(opp_name):
@@ -188,8 +212,11 @@ def main():
     if args.all_teams:
         rows = sb.select("games", {"season": args.season}, columns="team_id")
         tids = sorted({r["team_id"] for r in rows})
-        teams = sb.select("teams", {}, columns="id,gc_team_id")
+        teams = sb.select("teams", {}, columns="id,gc_team_id,name")
         seeds += [t["gc_team_id"] for t in teams if t["id"] in tids and t.get("gc_team_id")]
+    for t in teams if args.all_teams else sb.select("teams", {}, columns="id,gc_team_id,name"):
+        if t.get("gc_team_id"):
+            TRACKED[tracked_key(t.get("name", ""))] = (t["gc_team_id"], t.get("name", ""))
     seeds = list(dict.fromkeys(seeds))
     if not seeds:
         ap.error("give --team-id or --all-teams")
@@ -271,7 +298,7 @@ def main():
         out_rows = [{c: r.get(c) for c in cols} for r in out_rows]
         for i in range(0, len(out_rows), 200):
             sb.upsert_many("opponent_records", out_rows[i:i + 200], on_conflict="opponent_name,season")
-    log(f"DONE — {len(out_rows) - len(misses)} records saved, {len(misses)} not matched")
+    log(f"DONE — {len(out_rows)} records saved, {len(misses)} not matched")
     if misses:
         log("Not matched: " + "; ".join(misses))
 
