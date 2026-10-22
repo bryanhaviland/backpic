@@ -28,14 +28,23 @@ echo "" >> "$LOG"
 echo "========================================" >> "$LOG"
 echo "Run started: $(date)" >> "$LOG"
 echo "Since date: $SINCE_DATE" >> "$LOG"
+START_LINE=$(wc -l < "$LOG")
 echo "========================================" >> "$LOG"
 
 /opt/homebrew/bin/python3 -u \
   "$SCRIPT_DIR/gc_scraper.py" \
-  --headless \
   --all-teams \
   --since-date "$SINCE_DATE" \
   2>&1 | tee -a "$LOG"
+
+# ── Health check: warn if the scrape silently pulled nothing ──────────────
+# (Headless runs returned "Found 0 events" for every team on Oct 18-19.)
+EMPTY=$(tail -n +"$START_LINE" "$LOG" | grep -c "Found 0 events")
+TOTAL=$(tail -n +"$START_LINE" "$LOG" | grep -c "^TEAM:")
+if [ "$TOTAL" -gt 0 ] && [ $((EMPTY * 100 / TOTAL)) -ge 50 ]; then
+  echo "WARNING: $EMPTY of $TOTAL teams returned 0 schedule events - scrape likely blocked/broken" | tee -a "$LOG"
+  osascript -e 'display notification "Weekend scrape returned no schedule data for most teams" with title "BackPic scrape WARNING"' 2>/dev/null
+fi
 
 # ── Opponents' real records for strength of schedule (Scout a Tourney) ──
 echo "Opponent records started: $(date)" >> "$LOG"
