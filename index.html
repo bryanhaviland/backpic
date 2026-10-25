@@ -1357,6 +1357,12 @@ html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
   .header-row2 .tourney-btn { max-width: 230px; overflow: hidden; text-overflow: ellipsis; }
   .header-row2 > div { min-width: 0; }
 }
+
+.mini { margin-top: 8px; display: flex; justify-content: center; align-items: center; min-height: 26px; }
+.mini svg { display: block; max-width: 100%; }
+.mini-dots { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px; max-width: 120px; }
+.mini-dots i { width: 8px; height: 8px; border-radius: 50%; display: block; }
+.stat-card:hover .mini svg { filter: drop-shadow(0 0 4px rgba(232,181,90,.35)); }
 </style>
 </head>
 <body>
@@ -2511,17 +2517,18 @@ async function renderOverview(games, rec, batting, pitching) {
       ? `<div style="color:#8b949e;font-size:0.72rem;margin-top:4px">+${_ps.limited.length} limited-innings pitcher${_ps.limited.length>1?'s':''} (&lt;30% of games) — see Pitching tab</div>` : '')
     || '<div style="color:#8b949e;font-size:0.82rem">No pitching data</div>';
 
+  const _gs = miniSorted(games);
   document.getElementById('tab-overview').innerHTML = `
     <div style="max-width:1200px">
       <div style="color:#e8b55a;font-size:1.15rem;font-weight:800;margin-bottom:16px">${teamName}</div>
 
       <div class="stat-row">
-        <div class="stat-card" style="flex:2;min-width:140px"><span class="stat-val" style="font-size:1.5rem;white-space:nowrap">${wins}-${losses}${ties > 0 ? '-'+ties : ''}</span><div class="stat-label">Record</div></div>
-        <div class="stat-card" style="flex:1"><span class="stat-val">${wpct}</span><div class="stat-label">Win %</div></div>
-        <div class="stat-card" style="flex:1"><span class="stat-val green">${avgRF}</span><div class="stat-label">Runs/G</div></div>
-        <div class="stat-card" style="flex:1"><span class="stat-val red">${avgRA}</span><div class="stat-label">Allowed/G</div></div>
-        <div class="stat-card" style="flex:1"><span class="stat-val" style="color:${rf>=ra?'#3fb950':'#f85149'}">${runDiff}</span><div class="stat-label">Run Diff</div></div>
-        <div class="stat-card" style="flex:1"><span class="stat-val">${g}</span><div class="stat-label">Games</div></div>
+        <div class="stat-card" style="flex:2;min-width:140px"><span class="stat-val" style="font-size:1.5rem;white-space:nowrap">${wins}-${losses}${ties > 0 ? '-'+ties : ''}</span><div class="stat-label">Record</div><div class="mini">${miniDots(_gs)}</div></div>
+        <div class="stat-card" style="flex:1"><span class="stat-val">${wpct}</span><div class="stat-label">Win %</div><div class="mini">${miniRing(g > 0 ? wins / g : 0)}</div></div>
+        <div class="stat-card" style="flex:1"><span class="stat-val green">${avgRF}</span><div class="stat-label">Runs/G</div><div class="mini">${miniSpark(_gs.map(x => +x.runs_scored || 0), '#3fb950')}</div></div>
+        <div class="stat-card" style="flex:1"><span class="stat-val red">${avgRA}</span><div class="stat-label">Allowed/G</div><div class="mini">${miniSpark(_gs.map(x => +x.runs_allowed || 0), '#f85149')}</div></div>
+        <div class="stat-card" style="flex:1"><span class="stat-val" style="color:${rf>=ra?'#3fb950':'#f85149'}">${runDiff}</span><div class="stat-label">Run Diff</div><div class="mini">${miniDiffBars(_gs.map(x => (+x.runs_scored || 0) - (+x.runs_allowed || 0)))}</div></div>
+        <div class="stat-card" style="flex:1"><span class="stat-val">${g}</span><div class="stat-label">Games</div><div class="mini">${miniSplit(_gs)}</div></div>
       </div>
 
       <div class="two-col">
@@ -5244,6 +5251,46 @@ function lpRefresh() {
   const list = document.getElementById('lineupOrderList');
   if (list) new MutationObserver(lpRefresh).observe(list, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
 })();
+</script>
+<script>
+// ── Mini visuals for stat cards ──
+function miniSorted(games) {
+  return (games || []).filter(g => g && ['W', 'L', 'T'].includes(g.result))
+    .slice().sort((a, b) => String(a.game_date || '').localeCompare(String(b.game_date || '')));
+}
+function miniDots(gs) {
+  if (!gs.length) return '';
+  const col = r => r === 'W' ? '#3fb950' : r === 'L' ? '#f85149' : '#8b949e';
+  return '<div class="mini-dots">' + gs.slice(-20).map(g => `<i style="background:${col(g.result)}" title="${escAttr((g.opponent || '') + ' ' + (g.runs_scored ?? '?') + '-' + (g.runs_allowed ?? '?'))}"></i>`).join('') + '</div>';
+}
+function miniRing(p) {
+  const r = 15, c = 2 * Math.PI * r, f = Math.max(0, Math.min(1, p || 0));
+  const col = f >= .6 ? '#3fb950' : f >= .4 ? '#e8b55a' : '#f85149';
+  return `<svg width="38" height="38" viewBox="0 0 38 38"><circle cx="19" cy="19" r="${r}" fill="none" stroke="#21262d" stroke-width="5"/><circle cx="19" cy="19" r="${r}" fill="none" stroke="${col}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${(c * f).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 19 19)"/></svg>`;
+}
+function miniSpark(v, col) {
+  if (v.length < 2) return '';
+  const w = 90, h = 26, mx = Math.max(1, ...v), pad = 3;
+  const x = i => (pad + i * (w - 2 * pad) / (v.length - 1)).toFixed(1), y = n => (h - pad - n / mx * (h - 2 * pad)).toFixed(1);
+  const pts = v.map((n, i) => `${x(i)},${y(n)}`).join(' ');
+  const avg = v.reduce((a, b) => a + b, 0) / v.length;
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><line x1="0" x2="${w}" y1="${y(avg)}" y2="${y(avg)}" stroke="#30363d" stroke-dasharray="2 2"/><polyline fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="${pts}"/><circle cx="${x(v.length - 1)}" cy="${y(v[v.length - 1])}" r="2.6" fill="${col}"/></svg>`;
+}
+function miniDiffBars(d) {
+  if (!d.length) return '';
+  const w = 90, h = 26, mx = Math.max(1, ...d.map(Math.abs)), bw = Math.max(2, Math.min(7, (w / d.length) - 1.5)), step = w / d.length;
+  const bars = d.map((n, i) => {
+    const hh = Math.max(1.5, Math.abs(n) / mx * (h / 2 - 1));
+    return `<rect x="${(i * step + (step - bw) / 2).toFixed(1)}" y="${(n >= 0 ? h / 2 - hh : h / 2).toFixed(1)}" width="${bw.toFixed(1)}" height="${hh.toFixed(1)}" rx="1" fill="${n >= 0 ? '#3fb950' : '#f85149'}"/>`;
+  }).join('');
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><line x1="0" x2="${w}" y1="${h / 2}" y2="${h / 2}" stroke="#30363d"/>${bars}</svg>`;
+}
+function miniSplit(gs) {
+  const n = gs.length; if (!n) return '';
+  const c = r => gs.filter(g => g.result === r).length;
+  const seg = (k, col) => c(k) ? `<i style="width:${c(k) / n * 100}%;background:${col}"></i>` : '';
+  return `<div style="display:flex;width:90px;height:6px;border-radius:3px;overflow:hidden;background:#21262d">${seg('W', '#3fb950')}${seg('T', '#8b949e')}${seg('L', '#f85149')}</div>`;
+}
 </script>
 </body>
 </html>
