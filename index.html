@@ -1222,7 +1222,7 @@
 @keyframes bpDrawerIn { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
 
 /* ── WORKSPACE MODE: wide + tall screens (unfolded foldable, tablet) ── */
-@media (min-width: 820px) and (min-height: 560px) {
+@media (min-width: 820px) and (min-height: 340px) {
   body:has(#appScreen[style*="block"]) { overflow: hidden; }
   #appScreen[style*="block"] {
     display: flex; flex-direction: column;
@@ -1325,7 +1325,7 @@
 }
 
 /* mid-width: rail becomes an overlay so content keeps room */
-@media (min-width: 820px) and (max-width: 1019px) and (min-height: 560px) {
+@media (min-width: 820px) and (max-width: 1019px) and (min-height: 340px) {
   #ws { grid-template-columns: 172px minmax(0, 1fr); position: relative; }
   #ws .tab-bar { grid-column: 1; }
   #ws .tab-panel { grid-column: 2; }
@@ -1334,7 +1334,7 @@
 }
 
 /* overflow guards for the wide workspace */
-@media (min-width: 820px) and (min-height: 560px) {
+@media (min-width: 820px) and (min-height: 340px) {
   #ws > *, #ws .tab-panel > * { min-width: 0; }
   #ws .tab-panel { overflow-x: hidden; }
   #ws .tab-panel > div, #ws .tab-panel > section { max-width: 100%; }
@@ -1345,11 +1345,11 @@
   .header { flex-wrap: wrap; row-gap: 4px; }
   .header .user-email { display: none; }
 }
-@media (min-width: 1280px) and (min-height: 560px) { .header .user-email { display: inline; } }
+@media (min-width: 1280px) and (min-height: 340px) { .header .user-email { display: inline; } }
 
 /* hard overflow clamp — nothing may widen the page (iOS zooms out / pans if it does) */
 html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
-@media (min-width: 820px) and (min-height: 560px) {
+@media (min-width: 820px) and (min-height: 340px) {
   #appScreen[style*="block"] { overflow: hidden; width: 100%; max-width: 100vw; }
   .header { min-width: 0; max-width: 100%; }
   .header-row1, .header-row2, #userBadge { min-width: 0; flex-shrink: 1; }
@@ -1378,7 +1378,7 @@ html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
 .mstrip i { display: block; height: 100%; }
 
 /* robust full-height workspace + guaranteed pane scrolling (iOS-safe) */
-@media (min-width: 820px) and (min-height: 560px) {
+@media (min-width: 820px) and (min-height: 340px) {
   #appScreen[style*="block"] {
     position: fixed; height: auto; width: auto; max-width: none;
     top: env(safe-area-inset-top); right: env(safe-area-inset-right);
@@ -1388,6 +1388,20 @@ html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
     -webkit-overflow-scrolling: touch; overscroll-behavior: contain; touch-action: pan-y;
   }
   #ws .tab-panel { height: 100%; overflow-y: auto; padding-bottom: 90px; }
+}
+
+/* short landscape screens: keep workspace (fixed header, independent panes) but compact */
+@media (min-width: 820px) and (min-height: 340px) and (max-height: 620px) {
+  .header { padding: 4px 14px; gap: 12px; }
+  .sport-season-wrap { flex-direction: row; gap: 6px; }
+  .header-logo { font-size: 1.15rem; }
+  .tourney-btn { padding: 5px 12px; }
+  .rail-toggle { width: 32px; height: 32px; }
+  .tab-bar { padding: 6px 8px; }
+  .tab-btn, .notes-btn { padding: 7px 10px; }
+  .tab-row-label { margin-top: 8px; }
+  .rail-head { padding-top: 8px; }
+  .home-fab { width: 44px; height: 44px; bottom: calc(10px + env(safe-area-inset-bottom)); }
 }
 </style>
 </head>
