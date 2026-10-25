@@ -2418,11 +2418,12 @@ function renderBatting(rows) {
   const maxGP = Math.max(...rows.map(r => r.gp || 0));
   const minGP = Math.ceil(maxGP * 0.25);
   let batData = rows.filter(r => (r.gp || 0) >= minGP);
+  let lowData = rows.filter(r => (r.gp || 0) < minGP);
 
   window.sortBat = function(field, isName) {
     sortAsc2 = (sortField === field) ? !sortAsc2 : (isName ? true : false);
     sortField = field;
-    batData.sort((a,b) => {
+    const cmp = (a,b) => {
       const av = a[field], bv = b[field];
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
@@ -2430,15 +2431,22 @@ function renderBatting(rows) {
       return isName
         ? (sortAsc2 ? av.localeCompare(bv) : bv.localeCompare(av))
         : (sortAsc2 ? av - bv : bv - av);
-    });
+    };
+    batData.sort(cmp); lowData.sort(cmp);
     document.getElementById('bat-wrap').innerHTML = buildTable(batData);
+    const lw = document.getElementById('bat-wrap-low');
+    if (lw) lw.innerHTML = buildTable(lowData);
   };
 
   document.getElementById('tab-batting').innerHTML = `
     <div style="max-width:1400px">
       <div style="color:#e8b55a;font-size:1.1rem;font-weight:800;margin-bottom:4px">${teamName} — Season Batting</div>
-      <div style="color:#8b949e;font-size:0.78rem;margin-bottom:14px">Click column headers to sort · Green = strong · Red = weak · Players with &lt;25% of team games hidden</div>
+      <div style="color:#8b949e;font-size:0.78rem;margin-bottom:14px">Click column headers to sort · Green = strong · Red = weak · Players under 25% of team games listed separately below</div>
       <div class="tbl-wrap" id="bat-wrap">${buildTable(batData)}</div>
+      ${lowData.length ? `
+      <div style="color:#8b949e;font-size:1rem;font-weight:800;margin:22px 0 4px">Limited Appearances</div>
+      <div style="color:#8b949e;font-size:0.78rem;margin-bottom:10px">Played in fewer than ${minGP} of ${maxGP} games (&lt;25%) — small sample</div>
+      <div class="tbl-wrap" id="bat-wrap-low" style="opacity:0.8">${buildTable(lowData)}</div>` : ''}
     </div>`;
 }
 
