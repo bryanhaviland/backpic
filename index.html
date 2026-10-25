@@ -1346,6 +1346,17 @@
   .header .user-email { display: none; }
 }
 @media (min-width: 1280px) and (min-height: 560px) { .header .user-email { display: inline; } }
+
+/* hard overflow clamp — nothing may widen the page (iOS zooms out / pans if it does) */
+html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
+@media (min-width: 820px) and (min-height: 560px) {
+  #appScreen[style*="block"] { overflow: hidden; width: 100%; max-width: 100vw; }
+  .header { min-width: 0; max-width: 100%; }
+  .header-row1, .header-row2, #userBadge { min-width: 0; flex-shrink: 1; }
+  #userBadge { flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+  .header-row2 .tourney-btn { max-width: 230px; overflow: hidden; text-overflow: ellipsis; }
+  .header-row2 > div { min-width: 0; }
+}
 </style>
 </head>
 <body>
