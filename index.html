@@ -14,6 +14,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="bp-build" content="1792901197">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Softball Scouting Report</title>
 
@@ -1420,6 +1421,13 @@ html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
 }
 @media (min-width: 820px) and (max-width: 1019px) and (min-height: 340px) {
   #teamRail { position: fixed; top: var(--hdr, 64px); bottom: 0; left: 0; height: auto; }
+}
+
+/* installed (home-screen) app: header owns the status-bar inset */
+@media (min-width: 820px) and (min-height: 340px) {
+  body:has(#appScreen[style*="block"]) { padding-top: 0; }
+  .header { padding-top: calc(6px + env(safe-area-inset-top)); }
+  #teamRail, #ws .tab-bar { height: calc(100dvh - var(--hdr, 64px) - env(safe-area-inset-bottom)); }
 }
 </style>
 </head>
@@ -5429,6 +5437,22 @@ function miniZoneStrip(zones, field) {
   const e = document.querySelector('#appScreen .header');
   if (e && window.ResizeObserver) new ResizeObserver(set).observe(e);
   addEventListener('resize', set); addEventListener('orientationchange', set); set();
+})();
+</script>
+<script>
+// Self-update for installed home-screen app: if a newer build exists, reload once on a cache-busting URL
+(function () {
+  try {
+    const cur = (document.querySelector('meta[name="bp-build"]') || {}).content;
+    if (!cur || location.protocol === 'file:') return;
+    fetch(location.pathname + '?_=' + Date.now(), { cache: 'no-store' }).then(r => r.text()).then(t => {
+      const m = t.match(/<meta name="bp-build" content="(\d+)"/);
+      if (m && m[1] !== cur && sessionStorage.getItem('bp_reload') !== m[1]) {
+        sessionStorage.setItem('bp_reload', m[1]);
+        location.replace(location.pathname + '?v=' + m[1]);
+      }
+    }).catch(() => {});
+  } catch (e) {}
 })();
 </script>
 </body>
