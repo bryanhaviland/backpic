@@ -4261,6 +4261,7 @@ async function runTournamentAnalysis(preset) {
       <div id="tourneySaveStatus" style="margin-left:auto;font-size:0.78rem;color:#8b949e">${doSave ? '💾 Saving…' : ''}</div>
     </div>
     <div id="ourGamesSection" style="margin-bottom:10px"></div>
+    <div id="seedingSection" style="margin-bottom:6px"></div>
     ${skill.html}
     ${tourneyCompareHTML(scored)}
     <div style="margin-top:28px">
@@ -4276,6 +4277,7 @@ async function runTournamentAnalysis(preset) {
   `;
 
   renderOurGamesSection();
+  loadSeedingStandings();
   try { tcmpRender(); } catch (e) { console.error(e); }
 
   if (doSave) {
@@ -4288,6 +4290,98 @@ async function runTournamentAnalysis(preset) {
       if (st) { st.style.color = '#f85149'; st.textContent = '⚠ Not saved: ' + (e.message || e); }
     }
   }
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+//  SEEDING STANDINGS — W-L, runs scored/allowed only. Rank: win% → fewest RA → run diff
+// ════════════════════════════════════════════════════════════════════════════
+async function loadSeedingStandings() {
+  const box = document.getElementById('seedingSection');
+  const selected = window._lastTourneySelected || [];
+  if (!box || !selected.length) return;
+  box.innerHTML = '<div style="color:#8b949e;font-size:0.8rem">⏳ Loading standings…</div>';
+  const idList = selected.map(t => `'${t.id}'`).join(',');
+  let rows = [];
+  try {
+    rows = await sql(`SELECT team_id, game_date, opponent, result, runs_scored, runs_allowed
+      FROM games
+      WHERE team_id IN (${idList}) AND season='${currentSeason}' AND result IN ('W','L','T')
+        AND runs_scored IS NOT NULL AND runs_allowed IS NOT NULL
+        AND gc_event_id NOT IN (SELECT gc_event_id FROM excluded_games WHERE gc_event_id IS NOT NULL)
+      ORDER BY game_date`);
+  } catch (e) {
+    box.innerHTML = '<div style="color:#f85149;font-size:0.8rem">⚠ Could not load standings: ' + escHtml(e.message || String(e)) + '</div>';
+    return;
+  }
+  rows.forEach(r => { r.d = String(r.game_date).slice(0, 10); });
+  const dates = [...new Set(rows.map(r => r.d))].sort();
+  if (!dates.length) { box.innerHTML = '<div style="color:#8b949e;font-size:0.8rem">No completed games yet.</div>'; return; }
+  // Default window: the latest game day and the 2 days before it (a weekend tournament)
+  const last = new Date(dates[dates.length - 1] + 'T12:00:00');
+  const cutoff = new Date(last); cutoff.setDate(cutoff.getDate() - 2);
+  const cutStr = cutoff.toISOString().slice(0, 10);
+  window._seedState = { rows, dates, on: new Set(dates.filter(d => d >= cutStr)) };
+  renderSeedingStandings();
+}
+
+function seedToggleDay(d) {
+  const st = window._seedState; if (!st) return;
+  if (st.on.has(d)) { if (st.on.size > 1) st.on.delete(d); } else st.on.add(d);
+  renderSeedingStandings();
+}
+
+function renderSeedingStandings() {
+  const box = document.getElementById('seedingSection');
+  const st = window._seedState;
+  if (!box || !st) return;
+  const names = window._tourneyNames || {};
+  const stat = {};
+  (window._lastTourneySelected || []).forEach(t => { stat[String(t.id)] = { id: String(t.id), name: t.name, w: 0, l: 0, t: 0, rs: 0, ra: 0 }; });
+  st.rows.filter(r => st.on.has(r.d)).forEach(r => {
+    const s = stat[String(r.team_id)]; if (!s) return;
+    if (r.result === 'W') s.w++; else if (r.result === 'L') s.l++; else s.t++;
+    s.rs += Number(r.runs_scored || 0); s.ra += Number(r.runs_allowed || 0);
+  });
+  const list = Object.values(stat).map(s => {
+    const g = s.w + s.l + s.t;
+    return Object.assign(s, { g, pct: g ? (s.w + 0.5 * s.t) / g : 0, diff: s.rs - s.ra });
+  });
+  list.sort((a, b) => (b.pct - a.pct) || (a.ra - b.ra) || (b.diff - a.diff) || a.name.localeCompare(b.name));
+  // Tied rank only if win%, RA and diff all match
+  let rank = 0;
+  list.forEach((s, i) => {
+    const p = list[i - 1];
+    if (!p || p.pct !== s.pct || p.ra !== s.ra || p.diff !== s.diff) rank = i + 1;
+    s.rank = rank; s.tied = (p && p.rank === rank) || (list[i + 1] && list[i + 1].pct === s.pct && list[i + 1].ra === s.ra && list[i + 1].diff === s.diff);
+  });
+  const fmtD = d => { const x = new Date(d + 'T12:00:00'); return x.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }); };
+  const chips = st.dates.slice(-6).map(d => {
+    const on = st.on.has(d);
+    return `<button onclick="seedToggleDay('${d}')" style="cursor:pointer;border:1px solid ${on ? '#e8b55a' : '#30363d'};background:${on ? '#2a2112' : 'transparent'};color:${on ? '#e8b55a' : '#8b949e'};border-radius:14px;padding:3px 10px;font-size:0.74rem;font-weight:700;margin:0 6px 6px 0">${fmtD(d)}</button>`;
+  }).join('');
+  const tr = list.map(s => {
+    const rec = s.w + '-' + s.l + (s.t ? '-' + s.t : '');
+    const rd = s.diff > 0 ? '+' + s.diff : String(s.diff);
+    const rdc = s.diff > 0 ? '#3fb950' : s.diff < 0 ? '#f85149' : '#8b949e';
+    const mine = (typeof myTeamId !== 'undefined' && myTeamId && String(myTeamId) === s.id);
+    return `<tr style="border-bottom:1px solid #21262d${mine ? ';background:#1c2433' : ''}">
+      <td style="padding:7px 6px;color:#e8b55a;font-weight:800;text-align:center">${s.tied ? 'T' : ''}${s.rank}</td>
+      <td style="padding:7px 6px;color:#e6edf3;font-weight:700">${escHtml(s.name)}</td>
+      <td style="padding:7px 6px;text-align:center;color:#e6edf3;font-weight:700">${rec}</td>
+      <td style="padding:7px 6px;text-align:center;color:#c9d1d9">${s.rs}</td>
+      <td style="padding:7px 6px;text-align:center;color:#e8b55a;font-weight:800">${s.ra}</td>
+      <td style="padding:7px 6px;text-align:center;color:${rdc};font-weight:700">${rd}</td></tr>`;
+  }).join('');
+  box.innerHTML = `
+    <div class="sec-title" style="margin-bottom:6px">🏁 Seeding Standings</div>
+    <div style="font-size:0.72rem;color:#8b949e;margin-bottom:8px">Final games only. Rank: win % → fewest runs allowed → run differential. Tap a day to include/exclude.</div>
+    <div style="margin-bottom:4px">${chips}</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.84rem">
+      <thead><tr style="border-bottom:2px solid #30363d;color:#8b949e;font-size:0.7rem;text-transform:uppercase">
+        <th style="padding:6px">#</th><th style="padding:6px;text-align:left">Team</th><th style="padding:6px">W-L</th><th style="padding:6px">RS</th><th style="padding:6px">RA</th><th style="padding:6px">Diff</th></tr></thead>
+      <tbody>${tr}</tbody></table></div>
+    <div style="margin-bottom:22px"></div>`;
 }
 
 function statCell(label, val) {
