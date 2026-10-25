@@ -1403,6 +1403,24 @@ html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
   .rail-head { padding-top: 8px; }
   .home-fab { width: 44px; height: 44px; bottom: calc(10px + env(safe-area-inset-bottom)); }
 }
+
+/* ── v2 workspace: normal page scroll + sticky header/rails (nested scroll froze on iOS) ── */
+@media (min-width: 820px) and (min-height: 340px) {
+  body:has(#appScreen[style*="block"]) { overflow-y: visible; overflow-x: clip; }
+  #appScreen[style*="block"] { position: static; display: block; height: auto; width: 100%; max-width: 100%; overflow: visible; }
+  .header { position: sticky; top: 0; z-index: 40; }
+  #ws { display: grid; align-items: start; height: auto; flex: none; }
+  #teamRail, #ws .tab-bar {
+    position: sticky; top: var(--hdr, 64px); align-self: start;
+    height: calc(100dvh - var(--hdr, 64px) - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-y: auto;
+  }
+  #ws .tab-panel { height: auto; overflow: visible; overflow-x: clip; padding-bottom: 90px; }
+  #ws .field-wrap { top: calc(var(--hdr, 64px) + 8px); }
+}
+@media (min-width: 820px) and (max-width: 1019px) and (min-height: 340px) {
+  #teamRail { position: fixed; top: var(--hdr, 64px); bottom: 0; left: 0; height: auto; }
+}
 </style>
 </head>
 <body>
@@ -5403,6 +5421,14 @@ function miniZoneStrip(zones, field) {
 (function () {
   const _p = populateDropdown;
   populateDropdown = function () { const r = _p.apply(this, arguments); fetchLeague(); return r; };
+})();
+</script>
+<script>
+(function () {
+  const set = () => { const e = document.querySelector('#appScreen .header'); if (e && e.offsetHeight) document.documentElement.style.setProperty('--hdr', e.offsetHeight + 'px'); };
+  const e = document.querySelector('#appScreen .header');
+  if (e && window.ResizeObserver) new ResizeObserver(set).observe(e);
+  addEventListener('resize', set); addEventListener('orientationchange', set); set();
 })();
 </script>
 </body>
