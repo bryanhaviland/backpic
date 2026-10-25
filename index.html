@@ -2292,11 +2292,12 @@ async function renderOverview(games, rec, batting, pitching) {
                COUNT(*) FILTER (WHERE result = 'L') AS opp_wins,
                COUNT(*) FILTER (WHERE result = 'W') AS opp_losses
         FROM games
-        WHERE runs_scored IS NOT NULL AND runs_allowed IS NOT NULL
+        WHERE season = '${currentSeason}'
+          AND runs_scored IS NOT NULL AND runs_allowed IS NOT NULL
           AND NOT (runs_scored = 0 AND runs_allowed = 0)
         GROUP BY opponent
       ) os ON os.opponent = w.opponent
-      WHERE w.team_id = ${teamId} AND w.result = 'W'
+      WHERE w.team_id = ${teamId} AND w.season = '${currentSeason}' AND w.result = 'W'
       ORDER BY opp_win_pct DESC NULLS LAST
       LIMIT 5
     `);
@@ -3770,7 +3771,7 @@ async function runTournamentAnalysis(preset) {
          JOIN (SELECT opponent, COUNT(*) AS total_games,
                       COUNT(*) FILTER (WHERE result='L') AS opp_wins,
                       COUNT(*) FILTER (WHERE result='W') AS opp_losses
-               FROM games WHERE result IN ('W','L','T') GROUP BY opponent) os ON os.opponent=g.opponent
+               FROM games WHERE season='${currentSeason}' AND result IN ('W','L','T') GROUP BY opponent) os ON os.opponent=g.opponent
          WHERE g.team_id IN (${idList}) AND g.season='${currentSeason}' AND g.result IN ('W','L','T')`),
     // Common opponents (played by 2+ selected teams)
     sql(`SELECT g.team_id, g.opponent, g.result, g.runs_scored, g.runs_allowed, g.game_date
@@ -4442,7 +4443,7 @@ async function confirmGuestPlayer() {
                END AS avg
         FROM game_batting_stats gbs
         JOIN games g ON g.id = gbs.game_id
-        WHERE gbs.team_id = ${teamId}
+        WHERE gbs.team_id = ${teamId} AND g.season = '${currentSeason}'
         GROUP BY gbs.player_name, gbs.player_num
       `);
       const batMatch = matchBatter(srcPlayer, batRows);
