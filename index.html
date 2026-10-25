@@ -14,7 +14,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="bp-build" content="1792902107">
+<meta name="bp-build" content="1792902385">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Softball Scouting Report</title>
 
@@ -1428,6 +1428,14 @@ html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
   body:has(#appScreen[style*="block"]) { padding-top: 0; }
   .header { padding-top: calc(6px + env(safe-area-inset-top)); }
   #teamRail, #ws .tab-bar { height: calc(100dvh - var(--hdr, 64px) - env(safe-area-inset-bottom)); }
+}
+
+/* zone tables: never clip — wrap sidebar under the field when tight, scroll if still too wide */
+@media (min-width: 600px) {
+  .field-layout { flex-wrap: wrap; }
+  .field-wrap { flex: 0 1 460px; }
+  .field-sidebar { flex: 1 1 380px; min-width: 0 !important; }
+  .field-sidebar > div { min-width: 0; max-width: 100%; overflow-x: auto; }
 }
 </style>
 </head>
