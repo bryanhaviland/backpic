@@ -1193,6 +1193,146 @@
   font-size: 1.1rem; cursor: pointer; margin-top: -4px;
 }
 </style>
+<style id="bp-workspace">
+/* ── POLISH (all widths) ── */
+@keyframes bpBarGrow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.score-bar { transform-origin: left center; animation: bpBarGrow .8s cubic-bezier(.2,.8,.2,1) both; }
+.rank-1 { box-shadow: 0 0 14px rgba(232,181,90,.55); }
+.spark-wrap { display: none; }
+.team-card { transition: transform .15s, border-color .15s, box-shadow .15s; }
+#teamRail, .rail-toggle { display: none; }
+#ws { display: block; }
+.lineup-preview { display: none; }
+/* compare */
+.tcmp { margin-top: 24px; background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 14px 16px; }
+.tcmp-pick { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.tcmp-pick span { color: #8b949e; font-weight: 800; font-size: .8rem; }
+.tcmp-pick select { flex: 1; min-width: 0; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 8px 10px; font-size: .88rem; }
+.tcmp-row { display: grid; grid-template-columns: 1fr 1.3fr 1fr; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid #21262d; }
+.tcmp-v { font-weight: 700; font-size: .95rem; color: #8b949e; text-align: center; }
+.tcmp-v.win { color: #e8b55a; text-shadow: 0 0 10px rgba(232,181,90,.45); }
+.tcmp-l { text-align: center; font-size: .7rem; text-transform: uppercase; letter-spacing: 1px; color: #8b949e; }
+.tcmp-bar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; margin-top: 4px; background: #21262d; }
+.tcmp-bar i { background: #e8b55a; display: block; }
+.tcmp-bar b { background: #58a6ff; display: block; }
+.tcmp-sum { text-align: center; margin-top: 10px; font-size: .8rem; color: #c9d1d9; }
+.tcmp-names { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 8px; font-size: .78rem; font-weight: 800; padding-bottom: 6px; border-bottom: 2px solid #30363d; }
+.tcmp-names div:first-child { color: #e8b55a; text-align: center; }
+.tcmp-names div:last-child { color: #58a6ff; text-align: center; }
+@keyframes bpDrawerIn { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* ── WORKSPACE MODE: wide + tall screens (unfolded foldable, tablet) ── */
+@media (min-width: 820px) and (min-height: 560px) {
+  body:has(#appScreen[style*="block"]) { overflow: hidden; }
+  #appScreen[style*="block"] {
+    display: flex; flex-direction: column;
+    height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+  /* compact frosted header */
+  .header {
+    flex-direction: row; align-items: center; flex-wrap: nowrap; gap: 18px;
+    padding: 8px 20px;
+    background: linear-gradient(135deg, rgba(15,25,35,.82), rgba(22,32,50,.82));
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    box-shadow: 0 4px 24px rgba(232,181,90,.10);
+    flex: 0 0 auto;
+  }
+  .header-row1, .header-row2 { flex: 0 0 auto; }
+  .header-row2 { margin-left: auto; }
+  #userBadge { padding: 0 !important; flex: 0 0 auto; }
+  .rail-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: none; border: 1px solid #30363d; color: #e8b55a; border-radius: 8px;
+    width: 36px; height: 36px; font-size: 1.1rem; cursor: pointer;
+  }
+  .rail-toggle:hover { border-color: #e8b55a; background: rgba(232,181,90,.1); }
+
+  /* master-detail grid */
+  #ws {
+    display: grid; flex: 1 1 auto; min-height: 0;
+    grid-template-columns: 280px 196px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  #ws.rail-collapsed { grid-template-columns: 0 196px minmax(0, 1fr); }
+  #ws.rail-collapsed #teamRail { display: none; }
+  #teamRail {
+    display: flex; flex-direction: column; min-height: 0;
+    grid-column: 1; grid-row: 1;
+    background: #0f141b; border-right: 1px solid #21262d;
+  }
+  .rail-head { display: flex; justify-content: space-between; padding: 14px 14px 6px; font-size: .7rem; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: #e8b55a; }
+  .rail-head #railCount { color: #6e7681; letter-spacing: 0; }
+  #railSearch { margin: 6px 12px 8px; background: #0d1117; border: 1px solid #30363d; color: #e6edf3; padding: 8px 10px; border-radius: 8px; font-size: .88rem; }
+  #railSearch:focus { outline: none; border-color: #e8b55a; }
+  #railList { overflow-y: auto; flex: 1; padding: 0 8px 12px; }
+  .rail-item { padding: 9px 10px; border-radius: 8px; cursor: pointer; color: #c9d1d9; font-size: .86rem; border-left: 3px solid transparent; margin-bottom: 2px; transition: background .12s; }
+  .rail-item:hover { background: #1a2230; }
+  .rail-item.active { background: rgba(232,181,90,.12); border-left-color: #e8b55a; color: #fff; font-weight: 700; }
+  .rail-item.mine::after { content: ' ⭐'; }
+  .rail-item.hidden { display: none; }
+
+  /* vertical tab rail */
+  .tab-bar {
+    grid-column: 2; grid-row: 1; min-height: 0; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 2px; padding: 10px 8px;
+    background: #10151c; border-bottom: none; border-right: 1px solid #21262d;
+  }
+  .tab-row, .tab-row:not(:last-child) { display: contents; border: 0; }
+  .tab-row-label { margin: 14px 0 4px 10px; padding: 0; border: 0; font-size: .62rem; }
+  .tab-btn, .notes-btn {
+    width: 100%; text-align: left; border: none; border-left: 3px solid transparent; border-radius: 8px;
+    padding: 11px 12px; letter-spacing: .5px; background: none; color: #8b949e;
+  }
+  .tab-btn:hover, .notes-btn:hover { background: #1a2230; color: #e6edf3; }
+  .tab-btn.active {
+    color: #e8b55a; background: rgba(232,181,90,.12); border-left-color: #e8b55a;
+    box-shadow: inset 0 0 18px rgba(232,181,90,.08), 0 0 14px rgba(232,181,90,.10);
+  }
+  .notes-btn { color: #58a6ff; margin-top: 10px; border: 1px solid #30363d; text-align: center; }
+
+  /* independently scrolling content pane */
+  #ws .tab-panel { grid-column: 3; grid-row: 1; min-height: 0; overflow-y: auto; }
+  #ws .field-wrap { position: sticky; top: 8px; align-self: flex-start; }
+  .spark-wrap { display: block; margin-right: 6px; }
+  .team-card:hover { transform: translateY(-2px); border-color: #e8b55a; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+  .stat-card { background: linear-gradient(160deg, #1b2432, #141a22); transition: box-shadow .15s, border-color .15s; }
+  .stat-card:hover { border-color: #e8b55a; box-shadow: 0 0 16px rgba(232,181,90,.18); }
+
+  /* slide-over drawers */
+  #notesModal, #tourneyModal, #teamModal { justify-content: flex-end; align-items: stretch; padding: 0; padding-right: env(safe-area-inset-right); }
+  #notesModal { background: transparent; pointer-events: none; }
+  #tourneyModal, #teamModal { background: rgba(0,0,0,.35); }
+  #notesModal .notes-modal-box, #tourneyModal .modal-box, #teamModal .modal-box {
+    height: 100%; max-height: none; border-radius: 0; border-top: none;
+    animation: bpDrawerIn .25s ease; pointer-events: auto;
+  }
+  #notesModal .notes-modal-box { width: 440px; max-width: 440px; border-left: 3px solid #58a6ff; }
+  #tourneyModal .modal-box, #teamModal .modal-box { width: 460px; max-width: 460px; border-left: 3px solid #e8b55a; }
+  #tourneyPanel { inset: 0 0 0 auto; width: min(780px, 62vw); border-left: 2px solid #e8b55a; box-shadow: -16px 0 48px rgba(0,0,0,.55); animation: bpDrawerIn .25s ease; }
+
+  /* dual-pane lineup builder */
+  #gameViewModal .modal-box { max-width: 920px !important; }
+  #gameViewModal .modal-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-content: start; }
+  #gameViewModal .modal-body > div:first-child { grid-column: 1 / -1; }
+  .lineup-preview { display: block; background: #0d1117; border: 1px solid #30363d; border-radius: 10px; padding: 12px 14px; align-self: start; position: sticky; top: 0; }
+  .lp-title { font-size: .7rem; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; color: #e8b55a; margin-bottom: 8px; }
+  .lp-row { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-bottom: 1px solid #1b222c; font-size: .88rem; }
+  .lp-n { width: 24px; height: 24px; border-radius: 50%; background: #e8b55a; color: #000; font-weight: 800; font-size: .78rem; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .lp-j { color: #e8b55a; min-width: 34px; font-size: .78rem; font-weight: 700; }
+  .lp-name { color: #e6edf3; font-weight: 600; }
+  .lp-bench .lp-n { background: #21262d; color: #6e7681; }
+  .lp-bench .lp-name { color: #6e7681; font-weight: 500; }
+}
+
+/* mid-width: rail becomes an overlay so content keeps room */
+@media (min-width: 820px) and (max-width: 1019px) and (min-height: 560px) {
+  #ws { grid-template-columns: 172px minmax(0, 1fr); position: relative; }
+  #ws .tab-bar { grid-column: 1; }
+  #ws .tab-panel { grid-column: 2; }
+  #teamRail { display: none; position: absolute; left: 0; top: 0; bottom: 0; width: 290px; z-index: 30; box-shadow: 12px 0 36px rgba(0,0,0,.55); animation: bpDrawerIn .2s ease; }
+  #ws.rail-open #teamRail { display: flex; }
+}
+</style>
 </head>
 <body>
 
@@ -1259,6 +1399,7 @@
 <div class="header">
   <!-- Row 1: logo -->
   <div class="header-row1">
+    <button class="rail-toggle" id="railToggle" onclick="toggleRail()" title="Show / hide team list" aria-label="Toggle team list">☰</button>
     <div class="sport-season-wrap">
       <button class="sport-toggle" id="sportToggle" onclick="toggleSport()" title="Click to switch sport">🥎</button>
       <button class="season-btn" id="seasonBtn" onclick="openSeasonModal()">Fall 2026</button>
@@ -1374,6 +1515,7 @@
     <div class="modal-body">
       <div style="color:#8b949e;font-size:0.78rem;margin-bottom:12px">Drag players into batting order, then click <strong style="color:#e8b55a">Set Lineup</strong> to start Game View.</div>
       <div id="lineupOrderList"></div>
+      <div id="lineupPreview" class="lineup-preview"></div>
     </div>
     <div class="modal-footer" style="gap:8px">
       <button class="btn-secondary" onclick="closeGameViewModal()">Cancel</button>
@@ -1473,6 +1615,12 @@
 </div>
 
 <!-- ══════════════════════════════════════════════════════ TABS -->
+<div id="ws">
+<aside id="teamRail">
+  <div class="rail-head"><span>Teams</span><span id="railCount"></span></div>
+  <input id="railSearch" placeholder="🔍 Filter teams…" oninput="railFilter(this.value)" autocomplete="off">
+  <div id="railList"></div>
+</aside>
 <div class="tab-bar">
   <div class="tab-row">
     <button class="tab-btn active" data-tab="home" onclick="switchTab(this,'home')">🏠 Home</button>
@@ -1504,6 +1652,8 @@
 <div id="tab-hithre"   class="tab-panel"><div class="empty-state">Select a team first</div></div>
 <div id="tab-pitching" class="tab-panel"><div class="empty-state">Select a team first</div></div>
 <div id="tab-catching" class="tab-panel"><div class="empty-state">Select a team first</div></div>
+
+</div><!-- /ws -->
 
 </div><!-- /appScreen -->
 
@@ -3908,6 +4058,7 @@ async function runTournamentAnalysis(preset) {
           <div style="font-weight:700;font-size:0.95rem;color:#e6edf3">${_tourneyTeamLink(s.t.id, s.t.name)}</div>
           <div style="font-size:0.78rem;color:#8b949e;margin-top:2px">${recStr}</div>
         </div>
+        <div class="spark-wrap" title="Run differential, last 5 games (oldest to newest)">${formSpark(s.form)}</div>
         <div style="text-align:right;min-width:80px">
           <div style="font-size:1.1rem;font-weight:800;color:#e8b55a">${s.composite.toFixed(1)}</div>
           <div style="font-size:0.7rem;color:#8b949e">STRENGTH</div>
@@ -3997,6 +4148,7 @@ async function runTournamentAnalysis(preset) {
     </div>
     <div id="ourGamesSection" style="margin-bottom:10px"></div>
     ${skill.html}
+    ${tourneyCompareHTML(scored)}
     <div style="margin-top:28px">
       <div class="sec-title" style="margin-bottom:6px">📋 Team Detail — Composite Strength</div>
       <div style="margin-bottom:12px;color:#8b949e;font-size:0.75rem">
@@ -4010,6 +4162,7 @@ async function runTournamentAnalysis(preset) {
   `;
 
   renderOurGamesSection();
+  try { tcmpRender(); } catch (e) { console.error(e); }
 
   if (doSave) {
     const st = document.getElementById('tourneySaveStatus');
@@ -4965,6 +5118,107 @@ async function doSetNewPassword() {
     if (session) authReady(session);
   }
 }
+</script>
+<script>
+// ── Wide-screen workspace helpers (additive) ──
+function formSpark(form) {
+  const d = [...(form || [])].reverse().map(f => (+f.runs_scored || 0) - (+f.runs_allowed || 0));
+  if (d.length < 2) return '';
+  const w = 64, h = 22, m = Math.max(1, ...d.map(Math.abs));
+  const pts = d.map((v, i) => `${(i * (w - 6) / (d.length - 1) + 3).toFixed(1)},${(h / 2 - v / m * (h / 2 - 3)).toFixed(1)}`).join(' ');
+  const last = d[d.length - 1];
+  const col = last > 0 ? '#3fb950' : last < 0 ? '#f85149' : '#8b949e';
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><line x1="0" y1="${h / 2}" x2="${w}" y2="${h / 2}" stroke="#30363d" stroke-dasharray="2 2"/><polyline fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" points="${pts}"/></svg>`;
+}
+
+function tourneyCompareHTML(scored) {
+  if (!scored || scored.length < 2) return '';
+  window._tcmp = scored;
+  const opts = i => scored.map((s, j) => `<option value="${j}"${j === i ? ' selected' : ''}>${escHtml(s.t.name)}</option>`).join('');
+  return `<div class="tcmp"><div class="sec-title">⚖️ Side-by-Side Compare</div>
+    <div class="tcmp-pick"><select id="tcmpA" onchange="tcmpRender()">${opts(0)}</select><span>VS</span><select id="tcmpB" onchange="tcmpRender()">${opts(1)}</select></div>
+    <div id="tcmpBody"></div></div>`;
+}
+
+function tcmpRender() {
+  const S = window._tcmp || [];
+  const ea = document.getElementById('tcmpA'), eb = document.getElementById('tcmpB'), body = document.getElementById('tcmpBody');
+  if (!ea || !eb || !body) return;
+  const a = S[+ea.value], b = S[+eb.value];
+  if (!a || !b) return;
+  const f3 = v => v > 0 ? v.toFixed(3).replace(/^0/, '') : '—';
+  const rows = [
+    ['Win %', a.wpct * 100, b.wpct * 100, 1, v => v.toFixed(1) + '%'],
+    ['Runs / G', a.runsPerG, b.runsPerG, 1, v => v.toFixed(1)],
+    ['Allowed / G', a.allowPerG, b.allowPerG, -1, v => v.toFixed(1)],
+    ['Run Diff / G', a.rdPerGame, b.rdPerGame, 1, v => (v > 0 ? '+' : '') + v.toFixed(1)],
+    ['BA', a.ba, b.ba, 1, f3], ['OBP', a.obp, b.obp, 1, f3], ['SLG', a.slg, b.slg, 1, f3],
+    ['ERA', a.era < 9 ? a.era : null, b.era < 9 ? b.era : null, -1, v => v.toFixed(2)],
+    ['WHIP', a.whip < 3 ? a.whip : null, b.whip < 3 ? b.whip : null, -1, v => v.toFixed(2)],
+    ['Quality Wins (T1)', a.tiers.t1, b.tiers.t1, 1, v => String(v)],
+    ['Strength', a.composite, b.composite, 1, v => v.toFixed(1)]
+  ];
+  let aw = 0, bw = 0, n = 0;
+  const html = rows.map(([lab, x, y, dir, fmt]) => {
+    const ok = x != null && y != null && !isNaN(x) && !isNaN(y);
+    let ca = '', cb = '', bar = '';
+    if (ok) {
+      n++;
+      if (dir * (x - y) > 1e-9) { ca = 'win'; aw++; } else if (dir * (y - x) > 1e-9) { cb = 'win'; bw++; }
+      if (x >= 0 && y >= 0 && x + y > 0) {
+        const pa = Math.round((dir > 0 ? x : y) / (x + y) * 100);
+        bar = `<div class="tcmp-bar"><i style="width:${pa}%"></i><b style="width:${100 - pa}%"></b></div>`;
+      }
+    }
+    return `<div class="tcmp-row"><div class="tcmp-v ${ca}">${x != null ? fmt(x) : '—'}</div><div class="tcmp-l">${lab}${bar}</div><div class="tcmp-v ${cb}">${y != null ? fmt(y) : '—'}</div></div>`;
+  }).join('');
+  const lead = aw === bw ? 'Dead even' : (aw > bw ? `${escHtml(a.t.name)} leads` : `${escHtml(b.t.name)} leads`);
+  body.innerHTML = `<div class="tcmp-names"><div>${escHtml(a.t.name)}<br><span style="color:#8b949e;font-weight:600">${a.wins}-${a.losses}</span></div><div></div><div>${escHtml(b.t.name)}<br><span style="color:#8b949e;font-weight:600">${b.wins}-${b.losses}</span></div></div>${html}<div class="tcmp-sum">${lead} · ${aw}–${bw} across ${n} categories</div>`;
+}
+
+// Team rail (master list on wide screens)
+function renderRail(teams) {
+  const list = document.getElementById('railList');
+  if (!list) return;
+  list.innerHTML = (teams || []).map(t => `<div class="rail-item${String(t.id) === myTeamId ? ' mine' : ''}" data-id="${escAttr(String(t.id))}" data-name="${escAttr(String(t.name))}" onclick="selectTeamFromModal('${escAttr(String(t.id))}','${escAttr(String(t.name))}')">${escHtml(String(t.name))}</div>`).join('');
+  const c = document.getElementById('railCount'); if (c) c.textContent = (teams || []).length;
+  const q = document.getElementById('railSearch'); if (q && q.value) railFilter(q.value);
+  const sel = document.getElementById('teamSel'); if (sel && sel.value) railMark(sel.value);
+}
+function railFilter(q) {
+  const lq = (q || '').toLowerCase();
+  document.querySelectorAll('#railList .rail-item').forEach(el => el.classList.toggle('hidden', !!lq && !el.dataset.name.toLowerCase().includes(lq)));
+}
+function railMark(id) {
+  document.querySelectorAll('#railList .rail-item').forEach(el => el.classList.toggle('active', el.dataset.id === String(id)));
+  const a = document.querySelector('#railList .rail-item.active'); if (a) a.scrollIntoView({ block: 'nearest' });
+}
+function toggleRail() { document.getElementById('ws').classList.toggle(innerWidth < 1020 ? 'rail-open' : 'rail-collapsed'); }
+(function () {
+  const _r = renderTeamModalList;
+  renderTeamModalList = function (t) { _r(t); renderRail(t); };
+  const _l = loadTeam;
+  loadTeam = function () { document.getElementById('ws').classList.remove('rail-open'); const r = _l.apply(this, arguments); railMark(document.getElementById('teamSel').value); return r; };
+  const _h = goHome;
+  goHome = function () { _h.apply(this, arguments); document.querySelectorAll('#ws .tab-panel').forEach(p => { p.scrollTop = 0; }); };
+  if (typeof allTeamsForModal !== 'undefined' && allTeamsForModal.length) renderRail(allTeamsForModal);
+})();
+
+// Lineup builder — live batting-order preview pane
+function lpRefresh() {
+  const list = document.getElementById('lineupOrderList'), pv = document.getElementById('lineupPreview');
+  if (!list || !pv) return;
+  const items = [...list.querySelectorAll('.lineup-item')];
+  const act = items.filter(e => !e.classList.contains('excluded'));
+  const ben = items.filter(e => e.classList.contains('excluded'));
+  const row = (e, i, bench) => `<div class="lp-row${bench ? ' lp-bench' : ''}"><span class="lp-n">${bench ? '–' : i + 1}</span><span class="lp-j">${escHtml(e.querySelector('.lineup-jersey')?.textContent || '')}</span><span class="lp-name">${escHtml(e.dataset.name || '')}</span></div>`;
+  pv.innerHTML = `<div class="lp-title">Batting Order · ${act.length}</div>${act.map((e, i) => row(e, i, false)).join('')}` +
+    (ben.length ? `<div class="lp-title" style="margin-top:12px">Bench · ${ben.length}</div>${ben.map(e => row(e, 0, true)).join('')}` : '');
+}
+(function () {
+  const list = document.getElementById('lineupOrderList');
+  if (list) new MutationObserver(lpRefresh).observe(list, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+})();
 </script>
 </body>
 </html>
