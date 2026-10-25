@@ -994,6 +994,57 @@
   .player-row:last-child { border-bottom: none; }
   .player-name { font-weight: 600; color: #e6edf3; }
   .player-stat { color: #e8b55a; font-weight: 600; }
+
+  /* ── LARGE SCREEN / FOLDABLE (unfolded inner display) — additive; phone <600px unchanged ── */
+  @supports (height: 100dvh) {
+    body { min-height: 100dvh; }
+    .modal-box { max-height: 85dvh; }
+    .notes-modal-box { max-height: 88dvh; }
+  }
+  @media (min-width: 600px) {
+    body { font-size: 15px; }
+    .header { padding: 14px 28px 16px; }
+    .header-top { padding: 10px 28px; }
+    .header-logo { font-size: 1.5rem; }
+    .team-select { min-width: 260px; font-size: 1rem; padding: 9px 12px; }
+    .scout-btn { padding: 9px 24px; font-size: 0.9rem; }
+    .tourney-btn { padding: 8px 18px; font-size: 0.85rem; }
+    .tab-row { padding: 0 20px; }
+    .tab-row-label { font-size: 0.68rem; padding: 0 12px 0 4px; }
+    .tab-btn { padding: 12px 16px; font-size: 0.84rem; }
+    .tab-panel { padding: 24px 28px; }
+    .stat-row { gap: 14px; }
+    .stat-card { padding: 18px 22px; min-width: 120px; }
+    .stat-val { font-size: 2.1rem; }
+    .stat-label { font-size: 0.74rem; }
+    .sec-title { font-size: 0.76rem; }
+    .game-row { padding: 10px 14px; font-size: 0.9rem; }
+    table.dt { font-size: 0.9rem; }
+    table.dt th, table.dt td { padding-top: 10px; padding-bottom: 10px; }
+    .scroll-box { max-height: min(62vh, 640px); }
+    .modal-box { max-width: 680px; }
+    .notes-modal-box { max-width: 820px; }
+    .season-modal-box { max-width: 400px; }
+    .field-layout { flex-wrap: nowrap; gap: 28px; }
+    .field-wrap { flex: 0 1 58%; }
+    .field-sidebar { flex: 1 1 0; min-width: 240px; }
+    .team-card-header { padding: 16px 20px; }
+    .team-card-body { padding: 0 20px 16px; }
+    .lineup-name { font-size: 0.95rem; }
+  }
+  @media (min-width: 900px) {
+    .tab-panel { padding: 28px 40px; }
+    .two-col { gap: 28px; }
+    .stat-card { min-width: 140px; }
+  }
+  @media (pointer: coarse) {
+    .tab-btn, .back-btn, .notes-btn, .btn-secondary, .btn-primary, .scout-btn, .tourney-btn { min-height: 40px; }
+    .modal-close { min-width: 40px; min-height: 40px; }
+  }
+  @media (orientation: landscape) and (max-height: 520px) {
+    .modal-box, .notes-modal-box { max-height: 94vh; }
+    .home-fab { width: 44px; height: 44px; bottom: calc(10px + env(safe-area-inset-bottom)); }
+  }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
