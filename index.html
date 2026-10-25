@@ -1332,6 +1332,20 @@
   #teamRail { display: none; position: absolute; left: 0; top: 0; bottom: 0; width: 290px; z-index: 30; box-shadow: 12px 0 36px rgba(0,0,0,.55); animation: bpDrawerIn .2s ease; }
   #ws.rail-open #teamRail { display: flex; }
 }
+
+/* overflow guards for the wide workspace */
+@media (min-width: 820px) and (min-height: 560px) {
+  #ws > *, #ws .tab-panel > * { min-width: 0; }
+  #ws .tab-panel { overflow-x: hidden; }
+  #ws .tab-panel > div, #ws .tab-panel > section { max-width: 100%; }
+  .two-col { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .field-layout > * { min-width: 0; }
+  .field-sidebar { min-width: 0 !important; }
+  #ws .tbl-wrap, #ws .scroll-box { max-width: 100%; overflow-x: auto; }
+  .header { flex-wrap: wrap; row-gap: 4px; }
+  .header .user-email { display: none; }
+}
+@media (min-width: 1280px) and (min-height: 560px) { .header .user-email { display: inline; } }
 </style>
 </head>
 <body>
