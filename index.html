@@ -14,7 +14,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="bp-build" content="1792901197">
+<meta name="bp-build" content="1792902107">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Softball Scouting Report</title>
 
@@ -2925,11 +2925,11 @@ function sprayBody(zones, isPlayer, playerName, overrideAvg) {
   return `
     <div class="stat-row" style="margin-bottom:16px">
       <div class="stat-card"><span class="stat-val green">${actualAvg}</span><div class="stat-label">Batting Average</div><div class="mini">${miniBench(parseFloat(actualAvg), 'ba', { max: 0.6, fmt: miniF3, showPct: !isPlayer })}</div></div>
-      <div class="stat-card"><span class="stat-val">${makesContactPct}</span><div class="stat-label">Makes Contact</div><div class="mini">${miniFill(pa > 0 ? total / pa : null, '#58a6ff')}</div></div>
-      <div class="stat-card"><span class="stat-val">${successRate}</span><div class="stat-label">Success Rate on Contact</div><div class="mini">${miniFill(total > 0 ? hits / total : null, '#3fb950')}</div></div>
-      <div class="stat-card"><span class="stat-val">${total}</span><div class="stat-label">Balls in Play</div><div class="mini">${miniZoneStrip(zones, 'total')}</div></div>
-      <div class="stat-card"><span class="stat-val green">${hits}</span><div class="stat-label">Hits</div><div class="mini">${miniZoneStrip(zones, 'hits')}</div></div>
-      ${isPlayer && batRow ? `<div class="stat-card"><span class="stat-val gold">${totalBases}</span><div class="stat-label">Total Bases</div><div class="mini">${miniFill(hits > 0 ? totalBases / (hits * 4) : null, '#e8b55a')}</div></div>` : ''}
+      <div class="stat-card"><span class="stat-val">${makesContactPct}</span><div class="stat-label">Makes Contact</div><div class="mini">${miniFill(pa > 0 ? total / pa : null, '#58a6ff', pa > 0 ? total + ' of ' + pa + ' PA' : '')}</div></div>
+      <div class="stat-card"><span class="stat-val">${successRate}</span><div class="stat-label">Success Rate on Contact</div><div class="mini">${miniFill(total > 0 ? hits / total : null, '#3fb950', total > 0 ? hits + ' of ' + total + ' in play' : '')}</div></div>
+      <div class="stat-card"><span class="stat-val">${total}</span><div class="stat-label">Balls in Play</div><div class="mini">${miniHitOut(hits, total)}</div></div>
+      <div class="stat-card"><span class="stat-val green">${hits}</span><div class="stat-label">Hits</div><div class="mini">${miniHitMix(hitMix(isPlayer, batRow))}</div></div>
+      ${isPlayer && batRow ? `<div class="stat-card"><span class="stat-val gold">${totalBases}</span><div class="stat-label">Total Bases</div><div class="mini">${miniFill(hits > 0 ? totalBases / (hits * 4) : null, '#e8b55a', hits > 0 ? (totalBases / hits).toFixed(2) + ' bases per hit' : '')}</div></div>` : ''}
       ${(() => {
         let bb, k;
         if (isPlayer && batRow) {
@@ -2940,11 +2940,11 @@ function sprayBody(zones, isPlayer, playerName, overrideAvg) {
           k  = _bpBatting.reduce((s,b) => s + (parseInt(b.k) ||0), 0);
         }
         return bb != null ? `
-          <div class="stat-card"><span class="stat-val" style="color:#4ec9b0">${bb}</span><div class="stat-label">Walks (BB)</div><div class="mini">${miniBench(pa > 0 ? bb / pa : NaN, 'bb', { max: 0.3, fmt: v => (v*100).toFixed(0)+'%', showPct: !isPlayer })}</div></div>
-          <div class="stat-card"><span class="stat-val" style="color:#f85149">${k}</span><div class="stat-label">Strikeouts (K)</div><div class="mini">${miniBench(pa > 0 ? k / pa : NaN, 'k', { max: 0.5, hb: -1, fmt: v => (v*100).toFixed(0)+'%', showPct: !isPlayer })}</div></div>` : '';
+          <div class="stat-card"><span class="stat-val" style="color:#4ec9b0">${bb}</span><div class="stat-label">Walks (BB)</div><div class="mini">${miniBench(pa > 0 ? bb / pa : NaN, 'bb', { max: 0.3, fmt: v => (v*100).toFixed(0)+'%', showPct: !isPlayer, own: pa > 0 ? (bb / pa * 100).toFixed(0) + '% of PA' : '', small: pa < 15 })}</div></div>
+          <div class="stat-card"><span class="stat-val" style="color:#f85149">${k}</span><div class="stat-label">Strikeouts (K)</div><div class="mini">${miniBench(pa > 0 ? k / pa : NaN, 'k', { max: 0.5, hb: -1, fmt: v => (v*100).toFixed(0)+'%', showPct: !isPlayer, own: pa > 0 ? (k / pa * 100).toFixed(0) + '% of PA' : '', small: pa < 15 })}</div></div>` : '';
       })()}
-      ${topZone ? `<div class="stat-card"><span class="stat-val gold">${topZone}</span><div class="stat-label">Most Active Zone</div><div class="mini">${miniFill(total > 0 ? (zones[topZone].total || 0) / total : null, '#e8b55a')}</div></div>` : ''}
-      ${bestBA ? `<div class="stat-card"><span class="stat-val">${bestBA}</span><div class="stat-label">Best BA Zone</div><div class="mini">${miniFill((zones[bestBA].hits || 0) / (zones[bestBA].total || 1), '#3fb950')}</div></div>` : ''}
+      ${topZone ? `<div class="stat-card"><span class="stat-val gold">${topZone}</span><div class="stat-label">Most Active Zone</div><div class="mini">${miniFill(total > 0 ? (zones[topZone].total || 0) / total : null, '#e8b55a', total > 0 ? Math.round((zones[topZone].total || 0) / total * 100) + '% of balls in play' : '')}</div></div>` : ''}
+      ${bestBA ? `<div class="stat-card"><span class="stat-val">${bestBA}</span><div class="stat-label">Best BA Zone</div><div class="mini">${miniFill((zones[bestBA].hits || 0) / (zones[bestBA].total || 1), '#3fb950', (zones[bestBA].hits || 0) + ' of ' + (zones[bestBA].total || 0) + ' hits')}</div></div>` : ''}
     </div>
     ${badgeHtml}
     <div class="field-layout">
@@ -5409,13 +5409,33 @@ function miniBench(v, key, o) {
   const L = _lgFor(key);
   if (!L || v == null || isNaN(v)) return '';
   const pos = x => Math.max(0, Math.min(100, x / o.max * 100));
+  const neutral = !!o.small;
   const good = (v - L.avg) * (o.hb === -1 ? -1 : 1) >= 0;
-  const txt = `lg ${o.fmt(L.avg)}${o.showPct ? ' · P' + _lgPct(L, v, o.hb) : ''}`;
-  return `<div class="mb"><div class="mb-track"><i class="mb-tick" style="left:${pos(L.avg)}%"></i><b class="mb-dot ${good ? 'g' : 'r'}" style="left:${pos(v)}%"></b></div><div class="mb-txt ${good ? 'good' : 'bad'}" title="League average = mean of all tracked teams this season">${txt}</div></div>`;
+  const cls = neutral ? '' : (good ? 'good' : 'bad');
+  const dot = neutral ? '' : (good ? 'g' : 'r');
+  const txt = `${o.own ? o.own + ' · ' : ''}lg ${o.fmt(L.avg)}${o.showPct ? ' · P' + _lgPct(L, v, o.hb) : ''}${neutral ? ' · small sample' : ''}`;
+  return `<div class="mb"><div class="mb-track"><i class="mb-tick" style="left:${pos(L.avg)}%"></i><b class="mb-dot ${dot}" style="left:${pos(v)}%;${neutral ? 'background:#8b949e' : ''}"></b></div><div class="mb-txt ${cls}" title="League average = mean of all tracked teams this season">${txt}</div></div>`;
 }
-function miniFill(f, col) {
+function miniFill(f, col, cap) {
   if (f == null || isNaN(f)) return '';
-  return `<div class="mfill"><i style="width:${Math.max(0, Math.min(1, f)) * 100}%;background:${col}"></i></div>`;
+  return `<div style="display:flex;flex-direction:column;align-items:center"><div class="mfill"><i style="width:${Math.max(0, Math.min(1, f)) * 100}%;background:${col}"></i></div>${cap ? `<div class="mb-txt">${cap}</div>` : ''}</div>`;
+}
+function miniHitOut(h, t) {
+  if (!t) return '';
+  return `<div style="display:flex;flex-direction:column;align-items:center"><div class="mfill" style="background:#30363d"><i style="width:${h / t * 100}%;background:#3fb950"></i></div><div class="mb-txt">${h} hits · ${t - h} outs</div></div>`;
+}
+function hitMix(isPlayer, batRow) {
+  const rows = isPlayer ? (batRow ? [batRow] : []) : (_bpBatting || []);
+  if (!rows.length) return null;
+  const n = k => rows.reduce((a, r) => a + (parseInt(r[k]) || 0), 0);
+  const h = n('h'), d = n('doubles'), t = n('triples'), hr = n('hr');
+  if (!h) return null;
+  return { s: Math.max(0, h - d - t - hr), d, t, hr, h };
+}
+function miniHitMix(m) {
+  if (!m) return '';
+  const parts = [['1B', m.s, '#58a6ff'], ['2B', m.d, '#32c896'], ['3B', m.t, '#fab40a'], ['HR', m.hr, '#fa4a4a']].filter(x => x[1] > 0);
+  return `<div style="display:flex;flex-direction:column;align-items:center"><div class="mstrip" style="gap:1px">${parts.map(x => `<i title="${x[0]}: ${x[1]}" style="width:${x[1] / m.h * 100}%;background:${x[2]}"></i>`).join('')}</div><div class="mb-txt">${parts.map(x => x[1] + ' ' + x[0]).join(' · ')}</div></div>`;
 }
 function miniZoneStrip(zones, field) {
   const tot = ZONES.reduce((s, z) => s + (zones[z]?.[field] || 0), 0);
