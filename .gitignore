@@ -18,3 +18,4 @@ __pycache__/
 versions/
 thumbnail.png
 .poller.lock
+.poller_stop
