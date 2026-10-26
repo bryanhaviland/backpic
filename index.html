@@ -1311,16 +1311,29 @@
   #tourneyModal .modal-box, #teamModal .modal-box { width: 460px; max-width: 460px; border-left: 3px solid #e8b55a; }
   :root { --tp-w: 50vw; }
   #tourneyPanel { inset: 0 0 0 auto; width: var(--tp-w); border-left: 2px solid #e8b55a; box-shadow: -16px 0 48px rgba(0,0,0,.55); animation: bpDrawerIn .25s ease; }
-  /* true split: while the tournament panel is open, the app shrinks into the left side instead of sitting under it */
-  #appScreen[style*="block"] { transition: margin-right .25s ease; }
-  body.tourney-open #appScreen[style*="block"] { margin-right: var(--tp-w); }
-  body.tourney-open #ws { grid-template-columns: 172px minmax(0, 1fr); }
-  body.tourney-open #ws .tab-bar { grid-column: 1; }
-  body.tourney-open #ws .tab-panel { grid-column: 2; }
+  /* true split: while the tournament panel is open, the whole app (header, menu, content) fits in the left half */
+  #appScreen[style*="block"] { transition: width .2s ease; }
+  body.tourney-open #appScreen[style*="block"] { width: calc(100% - var(--tp-w)); max-width: calc(100% - var(--tp-w)); margin: 0; overflow-x: clip; }
+  body.tourney-open #ws { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; }
   body.tourney-open #teamRail { display: none; }
-  body.tourney-open .header { padding: 6px 12px; gap: 10px; }
-  body.tourney-open .header-row2 { display: none; }
-  body.tourney-open .header .user-email { display: none; }
+  /* menu becomes a top strip that scrolls sideways */
+  body.tourney-open #ws .tab-bar { grid-column: 1; grid-row: 1; position: sticky; top: var(--hdr, 56px); z-index: 20; height: auto;
+    flex-direction: row; flex-wrap: nowrap; align-items: center; overflow-x: auto; overflow-y: hidden; padding: 6px 8px; gap: 4px;
+    border-right: none; border-bottom: 1px solid #21262d; -webkit-overflow-scrolling: touch; }
+  body.tourney-open #ws .tab-panel { grid-column: 1; grid-row: 2; padding-left: 12px; padding-right: 12px; }
+  body.tourney-open .tab-row-label { display: none; }
+  body.tourney-open .tab-btn, body.tourney-open .notes-btn { width: auto; flex: 0 0 auto; white-space: nowrap; padding: 8px 11px; margin: 0;
+    border-left: none; border-bottom: 3px solid transparent; border-radius: 6px; }
+  body.tourney-open .tab-btn.active { border-bottom-color: #e8b55a; }
+  body.tourney-open .header { padding: 6px 12px; gap: 8px; min-width: 0; }
+  body.tourney-open .header-row2, body.tourney-open .header .user-email { display: none; }
+  body.tourney-open .header-logo { font-size: 1.05rem; white-space: normal; line-height: 1.1; }
+  /* content reflows for a half-width pane */
+  body.tourney-open .two-col { grid-template-columns: minmax(0, 1fr); }
+  body.tourney-open .stat-row { flex-wrap: wrap; gap: 10px; }
+  body.tourney-open .stat-card { min-width: 0; flex: 1 1 130px; padding: 14px 12px; }
+  body.tourney-open .field-layout { flex-wrap: wrap; }
+  body.tourney-open .field-wrap, body.tourney-open .field-sidebar { flex: 1 1 100%; min-width: 0 !important; }
 
   /* dual-pane lineup builder */
   #gameViewModal .modal-box { max-width: 920px !important; }
