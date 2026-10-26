@@ -4300,6 +4300,7 @@ async function loadSeedingStandings() {
   const box = document.getElementById('seedingSection');
   const selected = window._lastTourneySelected || [];
   if (!box || !selected.length) return;
+  if (!window._isAdmin) { box.innerHTML = ''; return; }
   box.innerHTML = '<div style="color:#8b949e;font-size:0.8rem">⏳ Loading standings…</div>';
   const idList = selected.map(t => `'${t.id}'`).join(',');
   let rows = [];
@@ -4323,6 +4324,42 @@ async function loadSeedingStandings() {
   const cutStr = cutoff.toISOString().slice(0, 10);
   window._seedState = { rows, dates, on: new Set(dates.filter(d => d >= cutStr)) };
   renderSeedingStandings();
+}
+
+// Admin: queue a headed, scores-only scrape for every team in this tournament, then reload standings
+async function refreshTourneyScores() {
+  const btn = document.getElementById('seedRefreshBtn');
+  const setMsg = m => { window._seedRefreshMsg = m; const el = document.getElementById('seedRefreshStatus'); if (el) el.textContent = m; };
+  if (!window._isAdmin || window._seedRefreshing) return;
+  const selected = window._lastTourneySelected || [];
+  if (!selected.length) return;
+  const st = window._seedState;
+  const days = st ? [...st.on].sort() : [];
+  let since = days[0];
+  if (!since) { const d = new Date(); d.setDate(d.getDate() - 2); since = d.toISOString().slice(0, 10); }
+  window._seedRefreshing = true;
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+  setMsg('Queuing scrape…');
+  const { data, error } = await _sbClient.from('scrape_jobs')
+    .insert({ team_name: `SCORES|${since}|${selected.map(t => Number(t.id)).join(',')}`, status: 'pending' })
+    .select('id').single();
+  const done = (msg) => { window._seedRefreshing = false; setMsg(msg); const b = document.getElementById('seedRefreshBtn'); if (b) { b.disabled = false; b.style.opacity = '1'; } };
+  if (error || !data) { done('⚠ Could not queue: ' + (error ? error.message : 'unknown error')); return; }
+  const t0 = Date.now();
+  const poll = async () => {
+    if (Date.now() - t0 > 15 * 60 * 1000) { done('⚠ Timed out waiting for the Mac — check that it is awake and the poller is running.'); return; }
+    const { data: j } = await _sbClient.from('scrape_jobs').select('status,result_summary,error').eq('id', data.id).single();
+    if (j && j.status === 'completed') {
+      await loadSeedingStandings();
+      done('✓ Scores updated ' + new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }));
+      return;
+    }
+    if (j && j.status === 'failed') { done('⚠ Scrape failed: ' + (j.error || '').slice(0, 160)); return; }
+    const secs = Math.round((Date.now() - t0) / 1000);
+    setMsg((j && j.status === 'running' ? '⏳ Scraping on the Mac… ' : '⏳ Waiting for the Mac to pick it up… ') + secs + 's');
+    setTimeout(poll, 8000);
+  };
+  setTimeout(poll, 5000);
 }
 
 function seedToggleDay(d) {
@@ -4374,7 +4411,11 @@ function renderSeedingStandings() {
       <td style="padding:7px 6px;text-align:center;color:${rdc};font-weight:700">${rd}</td></tr>`;
   }).join('');
   box.innerHTML = `
-    <div class="sec-title" style="margin-bottom:6px">🏁 Seeding Standings</div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+      <div class="sec-title" style="margin:0">🏁 Seeding Standings</div>
+      <button id="seedRefreshBtn" onclick="refreshTourneyScores()" style="margin-left:auto;cursor:pointer;background:#e8b55a;color:#0f1923;border:none;border-radius:6px;padding:6px 12px;font-weight:800;font-size:0.76rem">🔄 Refresh scores</button>
+    </div>
+    <div id="seedRefreshStatus" style="font-size:0.74rem;color:#8b949e;margin-bottom:6px;min-height:1em">${window._seedRefreshMsg ? escHtml(window._seedRefreshMsg) : ''}</div>
     <div style="font-size:0.72rem;color:#8b949e;margin-bottom:8px">Final games only. Rank: win % → fewest runs allowed → run differential. Tap a day to include/exclude.</div>
     <div style="margin-bottom:4px">${chips}</div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.84rem">
@@ -5097,6 +5138,7 @@ async function authReady(session) {
 
   // Show admin button if user is admin
   const role = session.user.user_metadata?.role;
+  window._isAdmin = (role === 'admin');
   if (role === 'admin') {
     document.getElementById('adminPanelBtn').style.display = 'inline-block';
   }

@@ -48,6 +48,12 @@ def update_job(supabase_url, key, job_id, fields):
     sb_request(url, "PATCH", key, fields)
 
 def main():
+    import fcntl
+    _lock = open(SCRIPT_DIR / ".poller.lock", "w")
+    try:
+        fcntl.flock(_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit(0)  # another poller run is still working
     env = load_env()
     supabase_url = env.get("SUPABASE_URL", "").rstrip("/")
     supabase_key = env.get("SUPABASE_KEY", "")
@@ -69,15 +75,35 @@ def main():
             "started_at": datetime.datetime.utcnow().isoformat() + "Z",
         })
         try:
+            if team_name.startswith("SCORES|"):
+                # Admin "Refresh scores": SCORES|<since YYYY-MM-DD>|<db team ids, comma-sep>
+                # Headed (visible) run, schedule pages only.
+                _, since, ids = team_name.split("|", 2)
+                id_list = ",".join(str(int(x)) for x in ids.split(",") if x.strip())
+                rows = sb_request(f"{supabase_url}/rest/v1/teams?id=in.({id_list})&select=gc_team_id,name",
+                                  "GET", supabase_key) or []
+                cmd = [PYTHON, str(SCRAPER), "--scores-only", "--since-date", since, "--timeout", "30000"]
+                for r in rows:
+                    cmd += ["--team-id", r["gc_team_id"], "--team", r["name"]]
+                if not rows:
+                    raise RuntimeError("no teams resolved for SCORES job")
+                timeout_s = 900
+            else:
+                cmd = [PYTHON, str(SCRAPER), "--team", team_name, "--headless", "--timeout", "30000"]
+                timeout_s = 900
             result = subprocess.run(
-                [PYTHON, str(SCRAPER), "--team", team_name, "--headless", "--timeout", "30000"],
-                capture_output=True, text=True, timeout=900,
+                cmd,
+                capture_output=True, text=True, timeout=timeout_s,
                 cwd=str(SCRIPT_DIR), env=run_env,
             )
             output = (result.stdout or "") + (result.stderr or "")
             if result.returncode == 0:
-                summary = next((l.strip() for l in reversed(output.splitlines())
-                                if "✓" in l or "games=" in l), "Completed")
+                if team_name.startswith("SCORES|"):
+                    n = sum(1 for l in output.splitlines() if l.startswith("[scores]"))
+                    summary = f"Scores updated: {n} game rows"
+                else:
+                    summary = next((l.strip() for l in reversed(output.splitlines())
+                                    if "✓" in l or "games=" in l), "Completed")
                 log(f"Job {job_id} completed: {summary}")
                 update_job(supabase_url, supabase_key, job_id, {
                     "status": "completed",

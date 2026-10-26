@@ -17,3 +17,4 @@ __pycache__/
 # Cowork artifact files
 versions/
 thumbnail.png
+.poller.lock

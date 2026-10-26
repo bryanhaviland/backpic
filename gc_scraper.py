@@ -104,6 +104,9 @@ def parse_args():
     p.add_argument("--since-date", default=None, dest="since_date",
                    help="Only process games on or after this date (YYYY-MM-DD). "
                         "Skips box scores, plays, and stats for older games.")
+    p.add_argument("--scores-only", action="store_true", dest="scores_only",
+                   help="Schedule pages only: update W/L + runs for each game (incl. games "
+                        "already in the DB). No box scores, plays, or player stats.")
     p.add_argument("--all-teams", action="store_true",
                    help="Scrape every team already in the Supabase teams table.")
     return p.parse_args()
@@ -2962,6 +2965,66 @@ def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
 
     db_team_id = upsert_team(sb, gc_team_id, team_name, args.sport)
     print(f"[supabase] Team row ID: {db_team_id}")
+
+    if getattr(args, "scores_only", False):
+        games = scrape_schedule(page, gc_team_id, args.timeout)
+        if args.since_date:
+            def _on_or_after(g):
+                iso = _parse_game_date(g.get("full_date_raw", ""), g.get("date", ""))
+                return (iso >= args.since_date) if iso else True
+            games = [g for g in games if _on_or_after(g)]
+        excl = excluded_event_ids(sb)
+        updated = 0
+        for g in games:
+            if g["gc_event_id"] in excl:
+                continue
+            if g.get("result") is None and g.get("runs_scored") is None and g.get("runs_allowed") is None:
+                continue  # not played / no score posted yet
+            # Non-destructive: for rows already in the DB touch ONLY result/score/opponent
+            # (never null out game_date, starting_pitcher, etc. — the schedule page only
+            # has a month, not the exact day).
+            _rows = sb.select("games", {"team_id": db_team_id, "gc_event_id": g["gc_event_id"]},
+                              columns="id,game_date,season")
+            existing = _rows[0] if _rows else None
+            if not existing:
+                opp = (g.get("opponent") or "").strip()
+                ha = g.get("home_away") or ""
+                if opp and opp.upper() != "TBD" and ha:
+                    # same-slot match under a reissued event id (same month/opponent/home-away/score)
+                    cands = sb.select("games", {"team_id": db_team_id, "opponent": opp, "home_away": ha,
+                                                "runs_scored": g.get("runs_scored"),
+                                                "runs_allowed": g.get("runs_allowed"),
+                                                "date": g.get("date")}, columns="id,game_date,season")
+                    if len(cands) == 1:
+                        existing = cands[0]
+            if existing:
+                patch = {"result": g.get("result") or None,
+                         "runs_scored": g.get("runs_scored"),
+                         "runs_allowed": g.get("runs_allowed"),
+                         "scraped_at": "now()"}
+                if (g.get("opponent") or "").strip():
+                    patch["opponent"] = g["opponent"].strip()
+                sb.update("games", existing["id"], patch)
+                game_row_id, have_date, season_lbl = existing["id"], existing.get("game_date"), existing.get("season")
+            else:
+                game_row_id = upsert_game(sb, db_team_id, g)
+                have_date = _parse_game_date(g.get("full_date_raw", ""), g.get("date", ""))
+                season_lbl = _infer_season(have_date or g.get("date"))
+            # Fill in an exact day when we don't have one (open the game page header once).
+            if not have_date and (season_lbl == "Fall 2026" or os.getenv("FILL_ALL_SEASONS") == "1"):
+                try:
+                    _lines = _load_box_score_page(page, gc_team_id, None, g["gc_event_id"], args.timeout)
+                    _iso = _parse_game_date(_extract_date_from_lines(_lines or []), "")
+                    if _iso:
+                        sb.update("games", game_row_id, {"game_date": _iso})
+                        print(f"[scores]   date filled: {_iso}")
+                except Exception as _e:
+                    print(f"[scores]   could not fill date: {_e}")
+            updated += 1
+            print(f"[scores] {g.get('date','')} vs {g.get('opponent','?')}: "
+                  f"{g.get('result') or 'in progress'} {g.get('runs_scored')}-{g.get('runs_allowed')}")
+        return {"team": team_name, "gc_id": gc_team_id, "games": updated, "new": updated,
+                "skipped": 0, "future_skipped": 0, "plays": 0, "batting": 0, "pitching": 0}
 
     team_slug   = get_team_slug(page, gc_team_id, args.timeout)
     stats_locked = is_stats_locked(page, gc_team_id, args.timeout)
