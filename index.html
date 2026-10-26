@@ -2440,9 +2440,35 @@ function heatColor(rate, alpha=0.88) {
 // ════════════════════════════════════════════════════════════════════════════
 //  FIELD SVG BUILDER
 // ════════════════════════════════════════════════════════════════════════════
-function fieldSVG(zoneData, colorBy='hitRate') {
+function fieldSVG(zoneData, colorBy='hitRate', dots=false) {
   const maxTotal = Math.max(...ZONES.map(z => zoneData[z]?.total || 0), 1);
   let circles = '';
+  if (dots) {
+    // One dot per ball in play, scattered inside its zone (stable seeded jitter)
+    const DOT_COL = {out:'#8b949e', single:'#3fb950', double:'#e8b55a', triple:'#f0883e', hr:'#f85149'};
+    const SPREAD  = {P:16, '1B':26, '2B':26, '3B':26, SS:26, LF:44, CF:44, RF:44};
+    ZONES.forEach(z => {
+      const d = zoneData[z];
+      if (!d || !d.total) return;
+      const pos = ZONE_POS[z], R = SPREAD[z];
+      let seed = 0; for (const c of z) seed = (seed*31 + c.charCodeAt(0)) >>> 0;
+      const rnd = () => (seed = (seed*1664525 + 1013904223) >>> 0) / 4294967296;
+      const list = [];
+      for (let i=0;i<(d.outs||0);i++)    list.push('out');
+      for (let i=0;i<(d.singles||0);i++) list.push('single');
+      for (let i=0;i<(d.doubles||0);i++) list.push('double');
+      for (let i=0;i<(d.triples||0);i++) list.push('triple');
+      for (let i=0;i<(d.hr||0);i++)      list.push('hr');
+      while (list.length < d.total) list.push('out');
+      const n = list.length, rate = d.hits/d.total;
+      circles += `<circle cx="${pos.x}" cy="${pos.y}" r="${R+8}" fill="rgba(0,0,0,0.18)" stroke="rgba(255,255,255,0.12)" stroke-dasharray="3,3"/>`;
+      list.forEach((k,i) => {
+        const a = rnd()*Math.PI*2, rr = R*Math.sqrt(rnd());
+        circles += `<circle cx="${(pos.x+Math.cos(a)*rr).toFixed(1)}" cy="${(pos.y+Math.sin(a)*rr*0.85).toFixed(1)}" r="${n>30?3.2:4.2}" fill="${DOT_COL[k]}" stroke="rgba(0,0,0,0.6)" stroke-width="0.8" opacity="0.92"/>`;
+      });
+      circles += `<text x="${pos.x}" y="${pos.y+R+20}" text-anchor="middle" fill="white" font-size="10" font-weight="700" style="text-shadow:0 1px 3px rgba(0,0,0,0.95)">${z} · ${d.hits}/${d.total}</text>`;
+    });
+  } else
 
   ZONES.forEach(z => {
     const d = zoneData[z] || {hits:0, outs:0, total:0};
@@ -2529,6 +2555,15 @@ function zoneTable(zoneData) {
     </tr></thead>
     <tbody>${rows || '<tr><td colspan="5" style="text-align:center;color:#8b949e;padding:14px">No play data</td></tr>'}</tbody>
   </table>`;
+}
+
+function dotLegend() {
+  const row=(c,t)=>`<div class="legend-row"><div class="legend-dot" style="background:${c}"></div> ${t}</div>`;
+  return `<div class="legend">
+    <div style="font-size:0.7rem;color:#8b949e;margin-bottom:5px;text-transform:uppercase;letter-spacing:1px">Balls in Play</div>
+    ${row('#3fb950','Single')}${row('#e8b55a','Double')}${row('#f0883e','Triple')}${row('#f85149','Home Run')}${row('#8b949e','Out')}
+    <div style="margin-top:8px;font-size:0.72rem;color:#8b949e">1 dot = 1 ball in play<br>Placed within zone (exact landing spot not tracked)</div>
+  </div>`;
 }
 
 function heatLegend(label='Hit Rate') {
@@ -2995,9 +3030,9 @@ function sprayBody(zones, isPlayer, playerName, overrideAvg) {
     </div>
     ${badgeHtml}
     <div class="field-layout">
-      <div class="field-wrap">${fieldSVG(zones,'hitRate')}</div>
+      <div class="field-wrap">${fieldSVG(zones,'hitRate',isPlayer)}</div>
       <div class="field-sidebar">
-        ${heatLegend('Batting Average by Zone')}
+        ${isPlayer ? dotLegend() : heatLegend('Batting Average by Zone')}
         <div>
           <div class="sec-title">Zone Breakdown</div>
           ${isPlayer ? playerZoneTable(zones) : zoneTable(zones)}
