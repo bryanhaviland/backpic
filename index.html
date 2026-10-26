@@ -1309,7 +1309,18 @@
   }
   #notesModal .notes-modal-box { width: 440px; max-width: 440px; border-left: 3px solid #58a6ff; }
   #tourneyModal .modal-box, #teamModal .modal-box { width: 460px; max-width: 460px; border-left: 3px solid #e8b55a; }
-  #tourneyPanel { inset: 0 0 0 auto; width: min(780px, 62vw); border-left: 2px solid #e8b55a; box-shadow: -16px 0 48px rgba(0,0,0,.55); animation: bpDrawerIn .25s ease; }
+  :root { --tp-w: clamp(480px, 55vw, 780px); }
+  #tourneyPanel { inset: 0 0 0 auto; width: var(--tp-w); border-left: 2px solid #e8b55a; box-shadow: -16px 0 48px rgba(0,0,0,.55); animation: bpDrawerIn .25s ease; }
+  /* true split: while the tournament panel is open, the app shrinks into the left side instead of sitting under it */
+  #appScreen[style*="block"] { transition: margin-right .25s ease; }
+  body.tourney-open #appScreen[style*="block"] { margin-right: var(--tp-w); }
+  body.tourney-open #ws { grid-template-columns: 172px minmax(0, 1fr); }
+  body.tourney-open #ws .tab-bar { grid-column: 1; }
+  body.tourney-open #ws .tab-panel { grid-column: 2; }
+  body.tourney-open #teamRail { display: none; }
+  body.tourney-open .header { padding: 6px 12px; gap: 10px; }
+  body.tourney-open .header-row2 { display: none; }
+  body.tourney-open .header .user-email { display: none; }
 
   /* dual-pane lineup builder */
   #gameViewModal .modal-box { max-width: 920px !important; }
@@ -3390,6 +3401,7 @@ function closeTourneyPanel(fromHistory) {
   const panel = document.getElementById('tourneyPanel');
   if (!panel.classList.contains('open')) return;
   panel.classList.remove('open');
+  document.body.classList.remove('tourney-open');
   // Pop the history entry pushed on open (unless browser/swipe back already did)
   if (!fromHistory && history.state && history.state.tourneyPanel) history.back();
 }
@@ -3397,6 +3409,7 @@ function _openTourneyPanel() {
   const panel = document.getElementById('tourneyPanel');
   if (!panel.classList.contains('open')) {
     panel.classList.add('open');
+    document.body.classList.add('tourney-open');
     try { history.pushState({ tourneyPanel: true }, ''); } catch (e) {}
   }
   panel.scrollTop = 0;
@@ -4002,6 +4015,7 @@ async function runTournamentAnalysis(preset) {
   window._lastTourneySelected = selected;
 
   const idList = selected.map(t => `'${t.id}'`).join(',');
+  if (window._isAdmin) { window._seedPrefetch = fetchSeedingRows(selected); window._seedPrefetch.catch(() => {}); }
 
   // Pull all stats in parallel
   const [gameRows, battingRows, pitchingRows, recentFormRows, oppWinRows, commonOppRows, gamesAll, oppRecRows, trackedRecRows] = await Promise.all([
@@ -4304,34 +4318,47 @@ async function runTournamentAnalysis(preset) {
 // ════════════════════════════════════════════════════════════════════════════
 //  SEEDING STANDINGS — W-L, runs scored/allowed only. Rank: win% → fewest RA → run diff
 // ════════════════════════════════════════════════════════════════════════════
-async function loadSeedingStandings() {
+function fetchSeedingRows(selected) {
+  const idList = selected.map(t => `'${t.id}'`).join(',');
+  const q = sql(`SELECT g.id, g.team_id, g.game_date, g.opponent, g.result, g.runs_scored, g.runs_allowed
+      FROM games g
+      WHERE g.team_id IN (${idList}) AND g.season='${currentSeason}' AND g.result IN ('W','L','T')
+        AND g.runs_scored IS NOT NULL AND g.runs_allowed IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM excluded_games x WHERE x.gc_event_id = g.gc_event_id)
+      ORDER BY g.game_date`);
+  const to = new Promise((_, rej) => setTimeout(() => rej(new Error('no response after 20s')), 20000));
+  return Promise.race([q, to]);
+}
+
+// force=true re-queries (used after a scores refresh); otherwise reuse the query started when the panel opened
+async function loadSeedingStandings(force) {
   const box = document.getElementById('seedingSection');
   const selected = window._lastTourneySelected || [];
   if (!box || !selected.length) return;
   if (!window._isAdmin) { box.innerHTML = ''; return; }
   box.innerHTML = '<div style="color:#8b949e;font-size:0.8rem">⏳ Loading standings…</div>';
-  const idList = selected.map(t => `'${t.id}'`).join(',');
+  const t0 = Date.now();
   let rows = [];
   try {
-    rows = await sql(`SELECT id, team_id, game_date, opponent, result, runs_scored, runs_allowed
-      FROM games
-      WHERE team_id IN (${idList}) AND season='${currentSeason}' AND result IN ('W','L','T')
-        AND runs_scored IS NOT NULL AND runs_allowed IS NOT NULL
-        AND gc_event_id NOT IN (SELECT gc_event_id FROM excluded_games WHERE gc_event_id IS NOT NULL)
-      ORDER BY game_date`);
+    const pre = !force && window._seedPrefetch;
+    window._seedPrefetch = null;
+    rows = await (pre || fetchSeedingRows(selected));
+    if (!Array.isArray(rows)) throw new Error('unexpected response: ' + String(rows).slice(0, 120));
+    rows.forEach(r => { r.d = String(r.game_date).slice(0, 10); });
+    const dates = [...new Set(rows.filter(r => r.game_date).map(r => r.d))].sort();
+    if (!dates.length) { box.innerHTML = '<div style="color:#8b949e;font-size:0.8rem">No completed games yet.</div>'; return; }
+    // Default window: the latest game day and the 2 days before it (a weekend tournament)
+    const last = new Date(dates[dates.length - 1] + 'T12:00:00');
+    const cutoff = new Date(last); cutoff.setDate(cutoff.getDate() - 2);
+    const cutStr = cutoff.toISOString().slice(0, 10);
+    const prevOn = window._seedState && window._seedState.on;
+    window._seedState = { rows, dates, on: new Set(dates.filter(d => d >= cutStr)), win: new Set(dates.filter(d => d >= cutStr)) };
+    if (prevOn && force) { const keep = [...prevOn].filter(d => dates.includes(d)); if (keep.length) window._seedState.on = new Set(keep); }
+    renderSeedingStandings();
   } catch (e) {
-    box.innerHTML = '<div style="color:#f85149;font-size:0.8rem">⚠ Could not load standings: ' + escHtml(e.message || String(e)) + '</div>';
-    return;
+    console.error('standings error:', e);
+    box.innerHTML = '<div style="color:#f85149;font-size:0.8rem">⚠ Could not load standings (' + Math.round((Date.now() - t0) / 1000) + 's): ' + escHtml((e && e.message) || String(e)) + ' <button onclick="loadSeedingStandings(true)" style="cursor:pointer;margin-left:6px;background:transparent;color:#e8b55a;border:1px solid #e8b55a;border-radius:6px;padding:2px 8px;font-size:0.72rem">Retry</button></div>';
   }
-  rows.forEach(r => { r.d = String(r.game_date).slice(0, 10); });
-  const dates = [...new Set(rows.map(r => r.d))].sort();
-  if (!dates.length) { box.innerHTML = '<div style="color:#8b949e;font-size:0.8rem">No completed games yet.</div>'; return; }
-  // Default window: the latest game day and the 2 days before it (a weekend tournament)
-  const last = new Date(dates[dates.length - 1] + 'T12:00:00');
-  const cutoff = new Date(last); cutoff.setDate(cutoff.getDate() - 2);
-  const cutStr = cutoff.toISOString().slice(0, 10);
-  window._seedState = { rows, dates, on: new Set(dates.filter(d => d >= cutStr)), win: new Set(dates.filter(d => d >= cutStr)) };
-  renderSeedingStandings();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -4622,7 +4649,7 @@ async function refreshTourneyScores() {
     if (Date.now() - t0 > 15 * 60 * 1000) { done('⚠ Timed out waiting for the Mac — check that it is awake and the poller is running.'); return; }
     const { data: j } = await _sbClient.from('scrape_jobs').select('status,result_summary,error').eq('id', data.id).single();
     if (j && j.status === 'completed') {
-      await loadSeedingStandings();
+      await loadSeedingStandings(true);
       done('✓ Scores updated ' + new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }));
       return;
     }
