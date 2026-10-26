@@ -1313,20 +1313,23 @@
   #tourneyPanel { inset: 0 0 0 auto; width: var(--tp-w); border-left: 2px solid #e8b55a; box-shadow: -16px 0 48px rgba(0,0,0,.55); animation: bpDrawerIn .25s ease; }
   /* true split: while the tournament panel is open, the whole app (header, menu, content) fits in the left half */
   #appScreen[style*="block"] { transition: width .2s ease; }
-  body.tourney-open #appScreen[style*="block"] { width: calc(100% - var(--tp-w)); max-width: calc(100% - var(--tp-w)); margin: 0; overflow-x: clip; }
+  body.tourney-open #appScreen[style*="block"] { width: calc(100vw - var(--tp-w)); max-width: calc(100vw - var(--tp-w)); margin: 0; overflow-x: clip; }
   body.tourney-open #ws { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; }
-  body.tourney-open #teamRail { display: none; }
-  /* menu becomes a top strip that scrolls sideways */
-  body.tourney-open #ws .tab-bar { grid-column: 1; grid-row: 1; position: sticky; top: var(--hdr, 56px); z-index: 20; height: auto;
-    flex-direction: row; flex-wrap: nowrap; align-items: center; overflow-x: auto; overflow-y: hidden; padding: 6px 8px; gap: 4px;
-    border-right: none; border-bottom: 1px solid #21262d; -webkit-overflow-scrolling: touch; }
+  /* team list: hidden until the ☰ button is tapped, then slides over the left half */
+  body.tourney-open #teamRail { display: none; position: fixed; top: var(--hdr, 56px); bottom: 0; left: 0; width: min(300px, calc(100vw - var(--tp-w) - 24px));
+    height: auto; z-index: 60; box-shadow: 12px 0 36px rgba(0,0,0,.55); }
+  body.tourney-open #ws.rail-open #teamRail { display: flex; }
+  /* menu becomes a wrapped strip across the top so every tab is reachable */
+  body.tourney-open #ws .tab-bar { grid-column: 1; grid-row: 1; position: static; height: auto;
+    flex-direction: row; flex-wrap: wrap; align-items: center; overflow: visible; padding: 6px 8px; gap: 4px;
+    border-right: none; border-bottom: 1px solid #21262d; }
   body.tourney-open #ws .tab-panel { grid-column: 1; grid-row: 2; padding-left: 12px; padding-right: 12px; }
   body.tourney-open .tab-row-label { display: none; }
-  body.tourney-open .tab-btn, body.tourney-open .notes-btn { width: auto; flex: 0 0 auto; white-space: nowrap; padding: 8px 11px; margin: 0;
+  body.tourney-open .tab-btn, body.tourney-open .notes-btn { width: auto; flex: 0 0 auto; white-space: nowrap; padding: 7px 9px; margin: 0; font-size: .78rem;
     border-left: none; border-bottom: 3px solid transparent; border-radius: 6px; }
   body.tourney-open .tab-btn.active { border-bottom-color: #e8b55a; }
   body.tourney-open .header { padding: 6px 12px; gap: 8px; min-width: 0; }
-  body.tourney-open .header-row2, body.tourney-open .header .user-email { display: none; }
+  body.tourney-open .header-row2, body.tourney-open .header .user-email, body.tourney-open #userBadge { display: none !important; }
   body.tourney-open .header-logo { font-size: 1.05rem; white-space: normal; line-height: 1.1; }
   /* content reflows for a half-width pane */
   body.tourney-open .two-col { grid-template-columns: minmax(0, 1fr); }
@@ -5782,7 +5785,7 @@ function railMark(id) {
   document.querySelectorAll('#railList .rail-item').forEach(el => el.classList.toggle('active', el.dataset.id === String(id)));
   const a = document.querySelector('#railList .rail-item.active'); if (a) a.scrollIntoView({ block: 'nearest' });
 }
-function toggleRail() { document.getElementById('ws').classList.toggle(innerWidth < 1020 ? 'rail-open' : 'rail-collapsed'); }
+function toggleRail() { document.getElementById('ws').classList.toggle((innerWidth < 1020 || document.body.classList.contains('tourney-open')) ? 'rail-open' : 'rail-collapsed'); }
 (function () {
   const _r = renderTeamModalList;
   renderTeamModalList = function (t) { _r(t); renderRail(t); };
