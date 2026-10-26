@@ -4380,6 +4380,29 @@ function renderSeedingStandings() {
     if (r.result === 'W') s.w++; else if (r.result === 'L') s.l++; else s.t++;
     s.rs += Number(r.runs_scored || 0); s.ra += Number(r.runs_allowed || 0);
   });
+  // Fallback ONLY for blocked teams (no completed games of their own in the selected days):
+  // build their record from the other selected teams' rows that name them as the opponent.
+  const _norm = x => String(x || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\b(\d{1,2}u|softball|fastpitch)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  const onRows = st.rows.filter(r => st.on.has(r.d));
+  const hasOwn = {};
+  onRows.forEach(r => { hasOwn[String(r.team_id)] = true; });
+  Object.values(stat).forEach(s => {
+    if (hasOwn[s.id]) return;
+    const me = _norm(s.name);
+    if (!me) return;
+    let n = 0;
+    onRows.forEach(r => {
+      if (String(r.team_id) === s.id) return;
+      const o = _norm(r.opponent);
+      if (!o || !(o === me || o.includes(me) || me.includes(o))) return;
+      // invert the opponent's row
+      if (r.result === 'W') s.l++; else if (r.result === 'L') s.w++; else s.t++;
+      s.rs += Number(r.runs_allowed || 0); s.ra += Number(r.runs_scored || 0);
+      n++;
+    });
+    if (n) s.derived = true;
+  });
   const list = Object.values(stat).map(s => {
     const g = s.w + s.l + s.t;
     return Object.assign(s, { g, pct: g ? (s.w + 0.5 * s.t) / g : 0, diff: s.rs - s.ra });
@@ -4404,7 +4427,7 @@ function renderSeedingStandings() {
     const mine = (typeof myTeamId !== 'undefined' && myTeamId && String(myTeamId) === s.id);
     return `<tr style="border-bottom:1px solid #21262d${mine ? ';background:#1c2433' : ''}">
       <td style="padding:7px 6px;color:#e8b55a;font-weight:800;text-align:center">${s.tied ? 'T' : ''}${s.rank}</td>
-      <td style="padding:7px 6px;color:#e6edf3;font-weight:700">${escHtml(s.name)}</td>
+      <td style="padding:7px 6px;color:#e6edf3;font-weight:700">${escHtml(s.name)}${s.derived ? ' <span title="Built from opponents\' results" style="color:#e8b55a">*</span>' : ''}</td>
       <td style="padding:7px 6px;text-align:center;color:#e6edf3;font-weight:700">${rec}</td>
       <td style="padding:7px 6px;text-align:center;color:#c9d1d9">${s.rs}</td>
       <td style="padding:7px 6px;text-align:center;color:#e8b55a;font-weight:800">${s.ra}</td>
@@ -4422,6 +4445,7 @@ function renderSeedingStandings() {
       <thead><tr style="border-bottom:2px solid #30363d;color:#8b949e;font-size:0.7rem;text-transform:uppercase">
         <th style="padding:6px">#</th><th style="padding:6px;text-align:left">Team</th><th style="padding:6px">W-L</th><th style="padding:6px">RS</th><th style="padding:6px">RA</th><th style="padding:6px">Diff</th></tr></thead>
       <tbody>${tr}</tbody></table></div>
+    ${list.some(x => x.derived) ? '<div style="font-size:0.7rem;color:#8b949e;margin-top:6px"><span style="color:#e8b55a">*</span> Team page blocked — record built from opponents\' results.</div>' : ''}
     <div style="margin-bottom:22px"></div>`;
 }
 
