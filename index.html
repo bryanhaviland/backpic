@@ -1698,6 +1698,10 @@ html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
     <div class="modal-body">
       <input class="modal-search" id="tourneyName" placeholder="🏆 Tournament name (e.g. NSA New Tampa 12U – Sep 26)" style="margin-bottom:8px">
       <label style="display:flex;align-items:center;gap:8px;font-size:0.8rem;color:#8b949e;margin-bottom:8px">Last day of tournament <input type="date" id="tourneyEnd" class="modal-search" style="margin:0;flex:1"></label>
+      <div style="border:1px solid #30363d;border-radius:8px;padding:8px;margin-bottom:8px">
+        <div style="font-size:0.74rem;color:#e8b55a;font-weight:800;margin-bottom:6px">🏁 Format — for seeding &amp; bracket (optional, admin)</div>
+        <div id="tourneyFmtBox"></div>
+      </div>
       <input class="modal-search" id="teamSearch" placeholder="🔍 Filter teams…" oninput="filterTeamList(this.value)">
       <div class="modal-actions">
         <button class="link-btn" onclick="selectAllTeams()">Select all</button>
@@ -2046,7 +2050,7 @@ async function renderHomeLanding() {
 async function loadTournamentScouting() {
   try {
     const rows = await sql(`
-      SELECT id, title, notes, created_at, team_ids, my_games
+      SELECT id, title, notes, created_at, team_ids, my_games, format
       FROM tournament_scouting
       WHERE LOWER(sport) = LOWER('${currentSport}')
         AND NOT COALESCE(archived, false)
@@ -3375,6 +3379,7 @@ function openTourneyModal() {
   document.getElementById('teamSearch').value = '';
   buildCheckboxList(allTeamsForModal);
   updateSelCount();
+  try { document.getElementById('tourneyFmtBox').innerHTML = fmtFieldsHTML('tm', {}); } catch (e) {}
 }
 
 function closeTourneyModal() {
@@ -3908,8 +3913,9 @@ async function saveOurGames() {
 }
 
 // Save the current tournament so it shows on the Home dashboard
-async function saveTournamentScouting(title, notes, teamIds, endDate) {
+async function saveTournamentScouting(title, notes, teamIds, endDate, fmt) {
   const row = { title, notes, sport: currentSport, season: currentSeason, team_ids: teamIds.map(Number) };
+  if (fmt) row.format = fmt;
   if (endDate && /^\d{4}-\d{2}-\d{2}$/.test(endDate)) row.end_date = endDate;
   let newId = null;
   const cowork = getCowork();
@@ -3921,8 +3927,8 @@ async function saveTournamentScouting(title, notes, teamIds, endDate) {
     const q = s => `'${String(s).replace(/'/g, "''")}'`;
     const res = await cowork.callMcpTool('mcp__062183b1-0e31-434a-b129-4ba2a01aa3a2__execute_sql', {
       project_id: 'fzndpqbjmhwwouxktmol',
-      query: `INSERT INTO tournament_scouting (title, notes, sport, season, team_ids, end_date)
-              VALUES (${q(title)}, ${q(notes)}, ${q(currentSport)}, ${q(currentSeason)}, ARRAY[${row.team_ids.join(',')}]::bigint[], ${row.end_date ? q(row.end_date) + '::date' : 'NULL'})
+      query: `INSERT INTO tournament_scouting (title, notes, sport, season, team_ids, end_date, format)
+              VALUES (${q(title)}, ${q(notes)}, ${q(currentSport)}, ${q(currentSeason)}, ARRAY[${row.team_ids.join(',')}]::bigint[], ${row.end_date ? q(row.end_date) + '::date' : 'NULL'}, ${fmt ? q(JSON.stringify(fmt)) + '::jsonb' : 'NULL'})
               RETURNING id`
     });
     try { newId = (parseMcp(res)[0] || {}).id; } catch (e) {}
@@ -3961,7 +3967,7 @@ async function openSavedTournament() {
   if (!t || !t.team_ids || !t.team_ids.length) return;
   const rows = await sql(`SELECT id, name FROM teams WHERE id IN (${t.team_ids.map(Number).join(',')})`);
   runTournamentAnalysis({ teams: rows.map(r => ({ id: String(r.id), name: r.name })), title: t.title,
-                          my_games: t.my_games || null, id: t.id });
+                          my_games: t.my_games || null, id: t.id, format: t.format || null });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -3972,6 +3978,7 @@ async function runTournamentAnalysis(preset) {
   if (preset && preset.teams) {
     selected = preset.teams; tourneyTitle = preset.title || 'Tournament'; doSave = false;
     presetGames = preset.my_games || null; presetId = preset.id || null;
+    window._tourneyFormat = preset.format || null;
   } else {
     const checked = [...document.querySelectorAll('#checkboxList input:checked')];
     if (checked.length < 2) return;
@@ -3979,6 +3986,7 @@ async function runTournamentAnalysis(preset) {
     const nameEl = document.getElementById('tourneyName');
     const endEl = document.getElementById('tourneyEnd');
     window._tourneyEndDate = (endEl && endEl.value) || null;
+    try { window._tourneyFormat = readFmt('tm'); } catch (e) { window._tourneyFormat = null; }
     tourneyTitle = (nameEl && nameEl.value.trim()) ||
       `Tournament — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
     doSave = true;
@@ -4283,7 +4291,7 @@ async function runTournamentAnalysis(preset) {
   if (doSave) {
     const st = document.getElementById('tourneySaveStatus');
     try {
-      window._tourneyCtx.tourneyId = await saveTournamentScouting(tourneyTitle, skill.notesText, selected.map(t => t.id), window._tourneyEndDate);
+      window._tourneyCtx.tourneyId = await saveTournamentScouting(tourneyTitle, skill.notesText, selected.map(t => t.id), window._tourneyEndDate, window._tourneyFormat);
       if (st) { st.style.color = '#3fb950'; st.textContent = '✓ Saved to Home dashboard'; }
     } catch (e) {
       console.error('saveTournamentScouting error:', e);
@@ -4305,7 +4313,7 @@ async function loadSeedingStandings() {
   const idList = selected.map(t => `'${t.id}'`).join(',');
   let rows = [];
   try {
-    rows = await sql(`SELECT team_id, game_date, opponent, result, runs_scored, runs_allowed
+    rows = await sql(`SELECT id, team_id, game_date, opponent, result, runs_scored, runs_allowed
       FROM games
       WHERE team_id IN (${idList}) AND season='${currentSeason}' AND result IN ('W','L','T')
         AND runs_scored IS NOT NULL AND runs_allowed IS NOT NULL
@@ -4322,8 +4330,272 @@ async function loadSeedingStandings() {
   const last = new Date(dates[dates.length - 1] + 'T12:00:00');
   const cutoff = new Date(last); cutoff.setDate(cutoff.getDate() - 2);
   const cutStr = cutoff.toISOString().slice(0, 10);
-  window._seedState = { rows, dates, on: new Set(dates.filter(d => d >= cutStr)) };
+  window._seedState = { rows, dates, on: new Set(dates.filter(d => d >= cutStr)), win: new Set(dates.filter(d => d >= cutStr)) };
   renderSeedingStandings();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  TOURNAMENT FORMAT + BRACKET (admin). Format saved in tournament_scouting.format (jsonb):
+//  { prelims: games per team, structure: 'all' | 'gold_silver', goldSize, elim: 'single' | 'double' }
+// ════════════════════════════════════════════════════════════════════════════
+function fmtNorm(f) {
+  f = f || {};
+  return {
+    prelims: Math.max(0, parseInt(f.prelims) || 0),
+    structure: f.structure === 'gold_silver' ? 'gold_silver' : 'all',
+    goldSize: Math.max(0, parseInt(f.goldSize) || 0),
+    elim: f.elim === 'double' ? 'double' : 'single'
+  };
+}
+function fmtFieldsHTML(p, f) {
+  f = fmtNorm(f);
+  const inp = 'background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:6px 8px;font-size:0.82rem;';
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.76rem;color:#8b949e">
+    <label>Prelim games per team<input id="${p}Prelims" type="number" min="0" max="12" value="${f.prelims || ''}" placeholder="e.g. 3" style="${inp}width:100%;margin-top:3px"></label>
+    <label>Elimination<select id="${p}Elim" style="${inp}width:100%;margin-top:3px">
+      <option value="single"${f.elim === 'single' ? ' selected' : ''}>Single</option>
+      <option value="double"${f.elim === 'double' ? ' selected' : ''}>Double</option></select></label>
+    <label>Bracket<select id="${p}Struct" onchange="document.getElementById('${p}GoldWrap').style.display=this.value==='gold_silver'?'block':'none'" style="${inp}width:100%;margin-top:3px">
+      <option value="all"${f.structure === 'all' ? ' selected' : ''}>Everyone seeded in one bracket</option>
+      <option value="gold_silver"${f.structure === 'gold_silver' ? ' selected' : ''}>Gold + Silver</option></select></label>
+    <label id="${p}GoldWrap" style="display:${f.structure === 'gold_silver' ? 'block' : 'none'}">Teams in Gold
+      <input id="${p}Gold" type="number" min="2" max="32" value="${f.goldSize || ''}" placeholder="rest go Silver" style="${inp}width:100%;margin-top:3px"></label>
+  </div>`;
+}
+function readFmt(p) {
+  const g = id => { const el = document.getElementById(p + id); return el ? el.value : ''; };
+  const f = fmtNorm({ prelims: g('Prelims'), structure: g('Struct'), goldSize: g('Gold'), elim: g('Elim') });
+  return f.prelims > 0 ? f : null;
+}
+async function saveTourneyFormat() {
+  const f = readFmt('ed');
+  window._tourneyFormat = f;
+  const id = window._tourneyCtx && window._tourneyCtx.tourneyId;
+  const msg = document.getElementById('fmtEditMsg');
+  if (id && _sbClient) {
+    const { error } = await _sbClient.from('tournament_scouting').update({ format: f }).eq('id', id);
+    if (error) { if (msg) msg.textContent = '⚠ Not saved: ' + error.message; }
+    else if (msg) msg.textContent = '✓ Saved';
+    try { await loadTournamentScouting(); } catch (e) {}
+  } else if (msg) { msg.textContent = 'Applied for this view (tournament not saved yet)'; }
+  window._fmtEditOpen = false;
+  renderSeedingStandings();
+}
+function toggleFmtEdit() { window._fmtEditOpen = !window._fmtEditOpen; renderSeedingStandings(); }
+
+function _bkNorm(x) {
+  return String(x || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\b(\d{1,2}u|softball|fastpitch)\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Per-team ordered list of completed games (own rows; blocked teams built from opponents' rows)
+function buildTeamGames() {
+  const st = window._seedState, sel = window._lastTourneySelected || [];
+  const rows = st.rows.filter(r => st.win.has(r.d));
+  const cmp = (a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : Number(a.id) - Number(b.id));
+  const teams = sel.map(t => ({ id: String(t.id), name: t.name, n: _bkNorm(t.name) }));
+  const oppId = (opp, selfId) => {
+    const o = _bkNorm(opp); if (!o) return null;
+    const exact = teams.filter(t => t.id !== selfId && t.n === o);
+    if (exact.length === 1) return exact[0].id;
+    const c = teams.filter(t => t.id !== selfId && (t.n.includes(o) || o.includes(t.n)));
+    return c.length === 1 ? c[0].id : null;
+  };
+  const own = {};
+  teams.forEach(t => { own[t.id] = []; });
+  rows.forEach(r => { const k = String(r.team_id); if (own[k]) own[k].push({ id: r.id, d: r.d, opp: oppId(r.opponent, k), result: r.result, rs: Number(r.runs_scored), ra: Number(r.runs_allowed), derived: false }); });
+  const tg = {};
+  teams.forEach(t => {
+    let list = own[t.id];
+    if (!list.length) {  // blocked team: invert opponents' rows that name it
+      list = [];
+      rows.forEach(r => {
+        const k = String(r.team_id); if (k === t.id || !own[k]) return;
+        if (oppId(r.opponent, k) !== t.id) return;
+        const res = r.result === 'W' ? 'L' : r.result === 'L' ? 'W' : 'T';
+        list.push({ id: r.id, d: r.d, opp: k, result: res, rs: Number(r.runs_allowed), ra: Number(r.runs_scored), derived: true });
+      });
+    }
+    list.sort(cmp);
+    list.forEach((g, i) => { g.idx = i; });
+    tg[t.id] = list;
+  });
+  return { tg, teams };
+}
+
+function seedOrder(size) { let o = [1]; while (o.length < size) { const n = o.length * 2; o = o.flatMap(s => [s, n + 1 - s]); } return o; }
+
+function buildBracketSpec(n, elim) {
+  const size = Math.max(2, Math.pow(2, Math.ceil(Math.log2(n))));
+  const k = Math.round(Math.log2(size));
+  const order = seedOrder(size);
+  const M = [], sr = s => (s <= n ? { seed: s } : 'BYE');
+  let prev = [];
+  for (let i = 0; i < size / 2; i++) { const id = `W1-${i + 1}`; M.push({ id, sec: 'Winners', rnd: 1, a: sr(order[2 * i]), b: sr(order[2 * i + 1]) }); prev.push(id); }
+  const wb = [prev];
+  for (let r = 2; r <= k; r++) {
+    const cur = [];
+    for (let i = 0; i < prev.length / 2; i++) { const id = `W${r}-${i + 1}`; M.push({ id, sec: 'Winners', rnd: r, a: { win: prev[2 * i] }, b: { win: prev[2 * i + 1] } }); cur.push(id); }
+    wb.push(cur); prev = cur;
+  }
+  const wbFinal = prev[0];
+  if (elim !== 'double' || k < 2) return { matches: M, final: wbFinal, size, k };
+  let lbPrev = [], lr = 1;
+  for (let i = 0; i < wb[0].length / 2; i++) { const id = `L1-${i + 1}`; M.push({ id, sec: 'Losers', rnd: 1, a: { lose: wb[0][2 * i] }, b: { lose: wb[0][2 * i + 1] } }); lbPrev.push(id); }
+  for (let r = 2; r <= k; r++) {
+    lr++; let cur = []; const wl = wb[r - 1];
+    for (let i = 0; i < lbPrev.length; i++) { const id = `L${lr}-${i + 1}`; M.push({ id, sec: 'Losers', rnd: lr, a: { win: lbPrev[i] }, b: { lose: wl[wl.length - 1 - i] } }); cur.push(id); }
+    lbPrev = cur;
+    if (r < k) {
+      lr++; cur = [];
+      for (let i = 0; i < lbPrev.length / 2; i++) { const id = `L${lr}-${i + 1}`; M.push({ id, sec: 'Losers', rnd: lr, a: { win: lbPrev[2 * i] }, b: { win: lbPrev[2 * i + 1] } }); cur.push(id); }
+      lbPrev = cur;
+    }
+  }
+  M.push({ id: 'GF', sec: 'Final', rnd: 1, a: { win: wbFinal }, b: { win: lbPrev[0] } });
+  M.push({ id: 'GF2', sec: 'Final', rnd: 2, reset: true });
+  return { matches: M, final: 'GF', size, k };
+}
+
+// Fill the bracket from completed post-prelim games between the seeded teams
+function resolveBracket(spec, seedTeams, pairGames) {
+  const byId = Object.fromEntries(spec.matches.map(m => [m.id, m]));
+  const res = {}, used = {};
+  const part = r => {
+    if (r === 'BYE') return 'BYE';
+    if (r.seed) return seedTeams[r.seed - 1] || 'BYE';
+    const m = res[r.win || r.lose];
+    return m ? (r.win ? m.winner : m.loser) : undefined;
+  };
+  spec.matches.forEach(m => {
+    let a, b;
+    if (m.reset) {
+      const gf = res['GF'];
+      if (gf && gf.winner && gf.b && gf.winner === gf.b) { a = gf.a; b = gf.b; } else { res[m.id] = { a: undefined, b: undefined, inactive: true }; return; }
+    } else { a = part(m.a); b = part(m.b); }
+    const o = { a, b };
+    res[m.id] = o;
+    if (a === 'BYE' && b === 'BYE') { o.winner = 'BYE'; o.loser = 'BYE'; return; }
+    if (a === 'BYE' && b) { o.winner = b; o.loser = 'BYE'; o.bye = true; return; }
+    if (b === 'BYE' && a) { o.winner = a; o.loser = 'BYE'; o.bye = true; return; }
+    if (!a || !b) return;
+    const key = [a.id, b.id].sort().join('|');
+    const list = pairGames[key] || [];
+    const g = list[used[key] || 0];
+    if (!g || g.winnerId == null) return;
+    used[key] = (used[key] || 0) + 1;
+    o.winner = g.winnerId === a.id ? a : b;
+    o.loser = o.winner === a ? b : a;
+    o.sa = g.scores[a.id]; o.sb = g.scores[b.id];
+  });
+  return res;
+}
+
+function bracketHTML(title, seedTeams, fmt, pairGames) {
+  if (seedTeams.length < 2) return '';
+  const spec = buildBracketSpec(seedTeams.length, fmt.elim);
+  const res = resolveBracket(spec, seedTeams, pairGames);
+  const seedOf = t => seedTeams.indexOf(t) + 1;
+  const nm = t => t === 'BYE' ? '<span style="color:#6e7681">BYE</span>' : t ? `<span style="color:#8b949e;font-size:0.7rem">#${seedOf(t)}</span> ${escHtml(t.name)}` : '<span style="color:#6e7681">TBD</span>';
+  const line = (t, sc, won) => `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;${won ? 'color:#3fb950;font-weight:800' : 'color:#e6edf3'}"><span>${nm(t)}</span><span>${sc == null ? '' : sc}</span></div>`;
+  const secs = [...new Set(spec.matches.map(m => m.sec))];
+  const body = secs.map(sec => {
+    const rnds = [...new Set(spec.matches.filter(m => m.sec === sec).map(m => m.rnd))].sort((x, y) => x - y);
+    return `<div style="margin:10px 0 4px;color:#e8b55a;font-size:0.72rem;font-weight:800;text-transform:uppercase">${sec}</div>` + rnds.map(r => {
+      const ms = spec.matches.filter(m => m.sec === sec && m.rnd === r).filter(m => { const o = res[m.id]; return o && !o.inactive && !(o.bye) && !(o.a === 'BYE' && o.b === 'BYE'); });
+      if (!ms.length) return '';
+      const label = sec === 'Final' ? (r === 1 ? 'Championship' : 'If necessary') : `Round ${r}`;
+      return `<div style="font-size:0.7rem;color:#8b949e;margin:6px 0 3px">${label}</div>` + ms.map(m => {
+        const o = res[m.id];
+        return `<div style="background:#161b22;border:1px solid #21262d;border-radius:6px;padding:4px 8px;margin-bottom:5px;font-size:0.8rem">${line(o.a, o.sa, o.winner && o.winner === o.a)}${line(o.b, o.sb, o.winner && o.winner === o.b)}</div>`;
+      }).join('');
+    }).join('');
+  }).join('');
+  const byes = spec.matches.filter(m => m.rnd === 1 && m.sec === 'Winners').map(m => res[m.id]).filter(o => o && o.bye).map(o => o.winner);
+  return `<div style="margin-top:14px"><div class="sec-title" style="margin-bottom:2px">🏆 ${title}</div>
+    ${byes.length ? `<div style="font-size:0.7rem;color:#8b949e">Byes: ${byes.map(t => escHtml(t.name) + ' (#' + seedOf(t) + ')').join(', ')}</div>` : ''}${body}</div>`;
+}
+
+// Standings + bracket when a tournament format (prelim count) is set
+function renderFormatStandings() {
+  const box = document.getElementById('seedingSection');
+  const st = window._seedState, fmt = fmtNorm(window._tourneyFormat);
+  if (!box || !st) return;
+  const { tg, teams } = buildTeamGames();
+  const list = teams.map(t => {
+    const games = (tg[t.id] || []).filter(g => g.result && g.idx < fmt.prelims);
+    const s = { id: t.id, name: t.name, w: 0, l: 0, t: 0, rs: 0, ra: 0, played: games.length, derived: (tg[t.id] || []).some(g => g.derived) };
+    games.forEach(g => { if (g.result === 'W') s.w++; else if (g.result === 'L') s.l++; else s.t++; s.rs += g.rs; s.ra += g.ra; });
+    s.g = s.w + s.l + s.t; s.pct = s.g ? (s.w + 0.5 * s.t) / s.g : 0; s.diff = s.rs - s.ra;
+    return s;
+  });
+  list.sort((a, b) => (b.pct - a.pct) || (a.ra - b.ra) || (b.diff - a.diff) || a.name.localeCompare(b.name));
+  let rank = 0;
+  list.forEach((s, i) => {
+    const p = list[i - 1], n = list[i + 1];
+    const same = (x, y) => x && y && x.pct === y.pct && x.ra === y.ra && x.diff === y.diff;
+    if (!same(p, s)) rank = i + 1;
+    s.rank = rank; s.tied = same(p, s) || same(s, n);
+  });
+  const done = list.every(s => s.played >= fmt.prelims);
+  const seeds = list.map(s => teams.find(t => t.id === s.id));
+  // post-prelim games between pairs of seeded teams (own rows first, then opponent's row inverted)
+  const pairGames = {};
+  const add = (a, b, g, aWon) => {
+    const key = [a, b].sort().join('|');
+    const arr = pairGames[key] = pairGames[key] || [];
+    if (arr.some(x => x.d === g.d && x.scores[a] === (aWon === 'own' ? g.rs : g.ra) && x.scores[b] === (aWon === 'own' ? g.ra : g.rs))) return;
+    const sc = {}; sc[a] = aWon === 'own' ? g.rs : g.ra; sc[b] = aWon === 'own' ? g.ra : g.rs;
+    let w = null; const aRes = aWon === 'own' ? g.result : (g.result === 'W' ? 'L' : g.result === 'L' ? 'W' : 'T');
+    if (aRes === 'W') w = a; else if (aRes === 'L') w = b;
+    arr.push({ d: g.d, id: g.id, scores: sc, winnerId: w });
+  };
+  teams.forEach(t => (tg[t.id] || []).forEach(g => { if (g.opp && g.result && g.idx >= fmt.prelims) add(t.id, g.opp, g, 'own'); }));
+  Object.values(pairGames).forEach(arr => arr.sort((x, y) => (x.d < y.d ? -1 : x.d > y.d ? 1 : Number(x.id) - Number(y.id))));
+  const tr = list.map(s => {
+    const rd = s.diff > 0 ? '+' + s.diff : String(s.diff);
+    const rdc = s.diff > 0 ? '#3fb950' : s.diff < 0 ? '#f85149' : '#8b949e';
+    const mine = (typeof myTeamId !== 'undefined' && myTeamId && String(myTeamId) === s.id);
+    return `<tr style="border-bottom:1px solid #21262d${mine ? ';background:#1c2433' : ''}">
+      <td style="padding:7px 6px;color:#e8b55a;font-weight:800;text-align:center">${s.tied ? 'T' : ''}${s.rank}</td>
+      <td style="padding:7px 6px;color:#e6edf3;font-weight:700">${escHtml(s.name)}${s.derived ? ' <span style="color:#e8b55a">*</span>' : ''}</td>
+      <td style="padding:7px 6px;text-align:center;color:#8b949e">${s.played}/${fmt.prelims}</td>
+      <td style="padding:7px 6px;text-align:center;color:#e6edf3;font-weight:700">${s.w}-${s.l}${s.t ? '-' + s.t : ''}</td>
+      <td style="padding:7px 6px;text-align:center;color:#c9d1d9">${s.rs}</td>
+      <td style="padding:7px 6px;text-align:center;color:#e8b55a;font-weight:800">${s.ra}</td>
+      <td style="padding:7px 6px;text-align:center;color:${rdc};font-weight:700">${rd}</td></tr>`;
+  }).join('');
+  let bracket = '';
+  if (!done) {
+    bracket = `<div style="margin-top:12px;font-size:0.8rem;color:#8b949e">⏳ Prelims in progress — bracket appears when every team has played ${fmt.prelims} games.</div>`;
+  } else {
+    const anyTie = list.some(s => s.tied);
+    const warn = anyTie ? '<div style="margin-top:10px;font-size:0.76rem;color:#e8b55a">⚠ Tied seeds (marked T) are ordered alphabetically for now — apply the tournament\'s own tiebreaker.</div>' : '';
+    if (fmt.structure === 'gold_silver') {
+      const g = Math.min(Math.max(2, fmt.goldSize || Math.ceil(seeds.length / 2)), seeds.length);
+      bracket = warn + bracketHTML('Gold bracket', seeds.slice(0, g), fmt, pairGames) +
+                bracketHTML('Silver bracket', seeds.slice(g), fmt, pairGames);
+    } else {
+      bracket = warn + bracketHTML('Bracket', seeds, fmt, pairGames);
+    }
+  }
+  const sum = `${fmt.prelims} prelim games · ${fmt.structure === 'gold_silver' ? 'Gold + Silver' + (fmt.goldSize ? ' (Gold ' + fmt.goldSize + ')' : '') : 'one bracket'} · ${fmt.elim} elimination`;
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+      <div class="sec-title" style="margin:0">🏁 Seeding Standings</div>
+      <button onclick="toggleFmtEdit()" style="margin-left:auto;cursor:pointer;background:transparent;color:#8b949e;border:1px solid #30363d;border-radius:6px;padding:5px 9px;font-size:0.72rem">✎ Format</button>
+      <button id="seedRefreshBtn" onclick="refreshTourneyScores()" style="cursor:pointer;background:#e8b55a;color:#0f1923;border:none;border-radius:6px;padding:6px 12px;font-weight:800;font-size:0.76rem">🔄 Refresh scores</button>
+    </div>
+    <div id="seedRefreshStatus" style="font-size:0.74rem;color:#8b949e;margin-bottom:4px;min-height:1em">${window._seedRefreshMsg ? escHtml(window._seedRefreshMsg) : ''}</div>
+    <div style="font-size:0.72rem;color:#8b949e;margin-bottom:8px">${sum}. Rank: win % → fewest runs allowed → run differential.</div>
+    ${window._fmtEditOpen ? `<div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:10px;margin-bottom:10px">${fmtFieldsHTML('ed', fmt)}<div style="margin-top:8px"><button onclick="saveTourneyFormat()" style="cursor:pointer;background:#e8b55a;color:#0f1923;border:none;border-radius:6px;padding:6px 12px;font-weight:800;font-size:0.76rem">Save format</button> <span id="fmtEditMsg" style="font-size:0.72rem;color:#8b949e"></span></div></div>` : ''}
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:0.84rem">
+      <thead><tr style="border-bottom:2px solid #30363d;color:#8b949e;font-size:0.7rem;text-transform:uppercase">
+        <th style="padding:6px">#</th><th style="padding:6px;text-align:left">Team</th><th style="padding:6px">Prelims</th><th style="padding:6px">W-L</th><th style="padding:6px">RS</th><th style="padding:6px">RA</th><th style="padding:6px">Diff</th></tr></thead>
+      <tbody>${tr}</tbody></table></div>
+    ${list.some(x => x.derived) ? '<div style="font-size:0.7rem;color:#8b949e;margin-top:6px"><span style="color:#e8b55a">*</span> Team page blocked — record built from opponents\' results.</div>' : ''}
+    ${bracket}
+    <div style="margin-bottom:22px"></div>`;
 }
 
 // Admin: queue a headed, scores-only scrape for every team in this tournament, then reload standings
@@ -4372,6 +4644,7 @@ function renderSeedingStandings() {
   const box = document.getElementById('seedingSection');
   const st = window._seedState;
   if (!box || !st) return;
+  if (fmtNorm(window._tourneyFormat).prelims > 0) { renderFormatStandings(); return; }
   const names = window._tourneyNames || {};
   const stat = {};
   (window._lastTourneySelected || []).forEach(t => { stat[String(t.id)] = { id: String(t.id), name: t.name, w: 0, l: 0, t: 0, rs: 0, ra: 0 }; });
@@ -4436,8 +4709,10 @@ function renderSeedingStandings() {
   box.innerHTML = `
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
       <div class="sec-title" style="margin:0">🏁 Seeding Standings</div>
-      <button id="seedRefreshBtn" onclick="refreshTourneyScores()" style="margin-left:auto;cursor:pointer;background:#e8b55a;color:#0f1923;border:none;border-radius:6px;padding:6px 12px;font-weight:800;font-size:0.76rem">🔄 Refresh scores</button>
+      <button onclick="toggleFmtEdit()" style="margin-left:auto;cursor:pointer;background:transparent;color:#8b949e;border:1px solid #30363d;border-radius:6px;padding:5px 9px;font-size:0.72rem">✎ Format</button>
+      <button id="seedRefreshBtn" onclick="refreshTourneyScores()" style="cursor:pointer;background:#e8b55a;color:#0f1923;border:none;border-radius:6px;padding:6px 12px;font-weight:800;font-size:0.76rem">🔄 Refresh scores</button>
     </div>
+    ${window._fmtEditOpen ? `<div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:10px;margin-bottom:10px">${fmtFieldsHTML('ed', window._tourneyFormat)}<div style="margin-top:8px"><button onclick="saveTourneyFormat()" style="cursor:pointer;background:#e8b55a;color:#0f1923;border:none;border-radius:6px;padding:6px 12px;font-weight:800;font-size:0.76rem">Save format</button> <span id="fmtEditMsg" style="font-size:0.72rem;color:#8b949e"></span></div></div>` : ''}
     <div id="seedRefreshStatus" style="font-size:0.74rem;color:#8b949e;margin-bottom:6px;min-height:1em">${window._seedRefreshMsg ? escHtml(window._seedRefreshMsg) : ''}</div>
     <div style="font-size:0.72rem;color:#8b949e;margin-bottom:8px">Final games only. Rank: win % → fewest runs allowed → run differential. Tap a day to include/exclude.</div>
     <div style="margin-bottom:4px">${chips}</div>
