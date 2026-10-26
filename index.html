@@ -2951,6 +2951,59 @@ function computeTeamBadges() {
 }
 
 // Builds the chart + stats + table HTML for a given zone dataset
+// ── Recent-form strip: one dot per plate appearance, oldest → newest ──
+// green = hit, red = out, gray ring = walk/HBP/sacrifice (no AB)
+async function loadFormStrip(playerName) {
+  const el = document.getElementById('form-strip');
+  if (!el || el.dataset.player !== playerName) return;
+  try {
+    const safe = playerName.replace(/'/g, "''");
+    const rows = await sql(`
+      SELECT p.outcome, p.game_id, g.game_date
+      FROM plays p JOIN games g ON g.id = p.game_id
+      WHERE p.team_id=${teamId} AND p.side='offense'
+        AND p.player_name='${safe}' AND g.season='${currentSeason}'
+      ORDER BY g.game_date, p.game_id, p.inning, p.id DESC`);
+    if (!rows || !rows.length) { el.innerHTML = ''; return; }
+    const HIT = new Set(['Single','Double','Triple','HomeRun']);
+    const NOAB = new Set(['Walk','HBP','SacBunt','SacFly']);
+    const abRows = rows.filter(r => !NOAB.has(r.outcome));
+    const seasonH = abRows.filter(r => HIT.has(r.outcome)).length;
+    const last = abRows.slice(-10);
+    const lastH = last.filter(r => HIT.has(r.outcome)).length;
+    const fmt = v => v.toFixed(3).replace(/^0/, '');
+    let summary = '';
+    if (last.length >= 5 && abRows.length) {
+      const seasonAvg = seasonH / abRows.length, lastAvg = lastH / last.length;
+      const diff = lastAvg - seasonAvg;
+      const tag = abRows.length >= 15 && last.length >= 10
+        ? (diff >= 0.15 ? ' <span style="color:#f85149;font-weight:800">🔥 HOT</span>'
+          : diff <= -0.15 ? ' <span style="color:#58a6ff;font-weight:800">🧊 COLD</span>' : '') : '';
+      summary = `Last ${last.length} AB: <b style="color:#e6edf3">${lastH}-for-${last.length}</b> (${fmt(lastAvg)}) · Season ${fmt(seasonAvg)}${tag}`;
+    }
+    const recent = rows.slice(-30);
+    let prevGame = null;
+    const dots = recent.map(r => {
+      const gap = prevGame !== null && r.game_id !== prevGame ? 'margin-left:10px;' : '';
+      prevGame = r.game_id;
+      const d = r.game_date ? new Date(r.game_date + 'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+      const style = HIT.has(r.outcome) ? 'background:#3fb950;border:2px solid #3fb950'
+                  : NOAB.has(r.outcome) ? 'background:transparent;border:2px solid #8b949e'
+                  : 'background:#f85149;border:2px solid #f85149';
+      return `<span title="${d} · ${r.outcome}" style="display:inline-block;width:14px;height:14px;border-radius:50%;box-sizing:border-box;${style};${gap}"></span>`;
+    }).join('');
+    el.innerHTML = `
+      <div style="margin-bottom:16px;padding:12px 14px;background:#161b22;border:1px solid #30363d;border-radius:10px">
+        <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+          <span style="color:#e8b55a;font-size:0.7rem;font-weight:800;letter-spacing:2px;text-transform:uppercase">Recent Form · last ${recent.length} PA</span>
+          <span style="color:#8b949e;font-size:0.78rem">${summary}</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center">${dots}</div>
+        <div style="margin-top:8px;color:#8b949e;font-size:0.7rem">Oldest → newest · gaps separate games · <span style="color:#3fb950">●</span> hit <span style="color:#f85149">●</span> out <span style="color:#8b949e">○</span> walk / HBP / sacrifice</div>
+      </div>`;
+  } catch (e) { console.error('form strip', e); el.innerHTML = ''; }
+}
+
 function sprayBody(zones, isPlayer, playerName, overrideAvg) {
   const total      = ZONES.reduce((s,z) => s + (zones[z]?.total || 0), 0);
   const hits       = ZONES.reduce((s,z) => s + (zones[z]?.hits  || 0), 0);
@@ -3004,6 +3057,7 @@ function sprayBody(zones, isPlayer, playerName, overrideAvg) {
     }
   }
 
+  if (isPlayer && playerName) setTimeout(() => loadFormStrip(playerName), 0);
   return `
     <div class="stat-row" style="margin-bottom:16px">
       <div class="stat-card"><span class="stat-val green">${actualAvg}</span><div class="stat-label">Batting Average</div><div class="mini">${miniBench(parseFloat(actualAvg), 'ba', { max: 0.6, fmt: miniF3, showPct: !isPlayer })}</div></div>
@@ -3029,6 +3083,7 @@ function sprayBody(zones, isPlayer, playerName, overrideAvg) {
       ${bestBA ? `<div class="stat-card"><span class="stat-val">${bestBA}</span><div class="stat-label">Best BA Zone</div><div class="mini">${miniFill((zones[bestBA].hits || 0) / (zones[bestBA].total || 1), '#3fb950', (zones[bestBA].hits || 0) + ' of ' + (zones[bestBA].total || 0) + ' hits')}</div></div>` : ''}
     </div>
     ${badgeHtml}
+    ${isPlayer && playerName ? `<div id="form-strip" data-player="${escHtml(playerName)}"></div>` : ''}
     <div class="field-layout">
       <div class="field-wrap">${fieldSVG(zones,'hitRate',isPlayer)}</div>
       <div class="field-sidebar">
