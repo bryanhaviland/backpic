@@ -4662,7 +4662,7 @@ async function refreshTourneyScores() {
   if (error || !data) { done('⚠ Could not queue: ' + (error ? error.message : 'unknown error')); return; }
   const t0 = Date.now();
   const poll = async () => {
-    if (Date.now() - t0 > 15 * 60 * 1000) { done('⚠ Timed out waiting for the Mac — check that it is awake and the poller is running.'); return; }
+    if (Date.now() - t0 > 15 * 60 * 1000) { done('⚠ Timed out — the Mac scraper only runs Sundays 9:30 AM–8 PM (and the Mac must be awake and signed in).'); return; }
     const { data: j } = await _sbClient.from('scrape_jobs').select('status,result_summary,error').eq('id', data.id).single();
     if (j && j.status === 'completed') {
       await loadSeedingStandings(true);

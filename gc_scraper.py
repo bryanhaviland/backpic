@@ -2948,6 +2948,23 @@ def _parse_stat_table(lines: list[str], stat_type: str) -> list[dict]:
 # Per-team scrape (called once per team inside a shared browser session)
 # ---------------------------------------------------------------------------
 
+
+_DATE_FAIL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".date_fill_failed.json")
+
+def _date_fill_failed(add: Optional[str] = None) -> set:
+    """Event ids whose game page had no readable date (restricted/empty) — skipped on later runs."""
+    try:
+        cur = set(json.load(open(_DATE_FAIL_FILE)))
+    except Exception:
+        cur = set()
+    if add:
+        cur.add(add)
+        try:
+            json.dump(sorted(cur), open(_DATE_FAIL_FILE, "w"))
+        except Exception:
+            pass
+    return cur
+
 def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
                     team_name: str, args) -> dict:
     """Scrape a single team and write everything to Supabase. Returns summary dict."""
@@ -2969,9 +2986,16 @@ def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
     if getattr(args, "scores_only", False):
         games = scrape_schedule(page, gc_team_id, args.timeout)
         if args.since_date:
+            _since_ym = args.since_date[:7]
             def _on_or_after(g):
                 iso = _parse_game_date(g.get("full_date_raw", ""), g.get("date", ""))
-                return (iso >= args.since_date) if iso else True
+                if iso:
+                    return iso >= args.since_date
+                # schedule cards only show "October 2026": compare at month level (skip older months)
+                m = re.match(r"([A-Za-z]{3})\w*\s+(\d{4})", g.get("date", "") or "")
+                if m and _MONTH_MAP.get(m.group(1).lower()):
+                    return f"{int(m.group(2)):04d}-{_MONTH_MAP[m.group(1).lower()]:02d}" >= _since_ym
+                return True
             games = [g for g in games if _on_or_after(g)]
         excl = excluded_event_ids(sb)
         updated = 0
@@ -2984,7 +3008,7 @@ def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
             # (never null out game_date, starting_pitcher, etc. — the schedule page only
             # has a month, not the exact day).
             _rows = sb.select("games", {"team_id": db_team_id, "gc_event_id": g["gc_event_id"]},
-                              columns="id,game_date,season")
+                              columns="id,game_date,season,result,runs_scored,runs_allowed,opponent")
             existing = _rows[0] if _rows else None
             if not existing:
                 opp = (g.get("opponent") or "").strip()
@@ -3004,22 +3028,33 @@ def scrape_one_team(sb: SupabaseClient, page: Page, gc_team_id: str,
                          "scraped_at": "now()"}
                 if (g.get("opponent") or "").strip():
                     patch["opponent"] = g["opponent"].strip()
-                sb.update("games", existing["id"], patch)
+                _same = (existing.get("result") == patch["result"]
+                         and existing.get("runs_scored") == patch["runs_scored"]
+                         and existing.get("runs_allowed") == patch["runs_allowed"]
+                         and (patch.get("opponent") is None or existing.get("opponent") == patch["opponent"])
+                         and existing.get("game_date"))
+                if not _same:
+                    sb.update("games", existing["id"], patch)
                 game_row_id, have_date, season_lbl = existing["id"], existing.get("game_date"), existing.get("season")
             else:
                 game_row_id = upsert_game(sb, db_team_id, g)
                 have_date = _parse_game_date(g.get("full_date_raw", ""), g.get("date", ""))
                 season_lbl = _infer_season(have_date or g.get("date"))
             # Fill in an exact day when we don't have one (open the game page header once).
-            if not have_date and (season_lbl == "Fall 2026" or os.getenv("FILL_ALL_SEASONS") == "1"):
+            if (not have_date and g["gc_event_id"] not in _date_fill_failed()
+                    and (season_lbl == "Fall 2026" or os.getenv("FILL_ALL_SEASONS") == "1")):
+                _iso = None
                 try:
-                    _lines = _load_box_score_page(page, gc_team_id, None, g["gc_event_id"], args.timeout)
+                    _lines = _load_box_score_page(page, gc_team_id, None, g["gc_event_id"], min(args.timeout, 15000))
                     _iso = _parse_game_date(_extract_date_from_lines(_lines or []), "")
-                    if _iso:
-                        sb.update("games", game_row_id, {"game_date": _iso})
-                        print(f"[scores]   date filled: {_iso}")
                 except Exception as _e:
                     print(f"[scores]   could not fill date: {_e}")
+                if _iso:
+                    sb.update("games", game_row_id, {"game_date": _iso})
+                    print(f"[scores]   date filled: {_iso}")
+                else:
+                    _date_fill_failed(add=g["gc_event_id"])  # don't retry unreadable pages every run
+                    print("[scores]   no date on page — won't retry")
             updated += 1
             print(f"[scores] {g.get('date','')} vs {g.get('opponent','?')}: "
                   f"{g.get('result') or 'in progress'} {g.get('runs_scored')}-{g.get('runs_allowed')}")

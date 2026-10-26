@@ -69,6 +69,10 @@ def main():
 
     for job in jobs:
         job_id, team_name = job["id"], job["team_name"]
+        # Headed score refreshes need the user's logged-in desktop session (real Chrome + AppleScript).
+        # Cron has no such session and fails with "signed out", so only the Sunday launchd poller handles them.
+        if team_name.startswith("SCORES|") and os.environ.get("BACKPIC_GUI") != "1":
+            continue
         log(f"Starting job {job_id} — team: {team_name!r}")
         update_job(supabase_url, supabase_key, job_id, {
             "status": "running",

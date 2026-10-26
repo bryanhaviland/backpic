@@ -19,3 +19,4 @@ versions/
 thumbnail.png
 .poller.lock
 .poller_stop
+.date_fill_failed.json
