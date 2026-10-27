@@ -1769,6 +1769,7 @@ html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
   <div class="tab-row">
     <button class="tab-btn active" data-tab="home" onclick="switchTab(this,'home')">🏠 Home</button>
     <button class="tab-btn" data-tab="overview" onclick="switchTab(this,'overview')">📊 Overview</button>
+    <button class="tab-btn" data-tab="leaders" onclick="switchTab(this,'leaders')">🏆 Leaders</button>
     <button class="notes-btn" onclick="openNotesModal()" title="Team & player scout notes">📝 Notes</button>
   </div>
   <div class="tab-row">
@@ -1791,6 +1792,7 @@ html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
 <div id="tab-overview" class="tab-panel">
   <div class="empty-state"><span id="emptyIcon">🥎</span> Select a team above and click <strong style="color:#e8b55a;margin:0 4px">SCOUT</strong> to generate the report</div>
 </div>
+<div id="tab-leaders" class="tab-panel"><div class="empty-state"><div class="spinner"></div> Loading leaders…</div></div>
 <div id="tab-batting"  class="tab-panel"><div class="empty-state">Select a team first</div></div>
 <div id="tab-spray"    class="tab-panel"><div class="empty-state">Select a team first</div></div>
 <div id="tab-hithre"   class="tab-panel"><div class="empty-state">Select a team first</div></div>
@@ -1840,6 +1842,7 @@ function toggleSport() {
   currentSport = currentSport === 'softball' ? 'baseball' : 'softball';
   localStorage.setItem('bp_sport', currentSport);
   updateSportUI();
+  refreshLeadersIfOpen();
   init();  // reload team list filtered to the new sport
 }
 
@@ -1881,6 +1884,7 @@ function selectSeason(s) {
   localStorage.setItem('bp_season', s);
   closeSeasonModal();
   updateSeasonUI();
+  refreshLeadersIfOpen();
   init();  // reload team list filtered to teams with games in the new season
   // Reload team data for new season if a team is already selected
   if (teamId) loadTeam();
@@ -2239,11 +2243,191 @@ async function sql(query) {
 // ════════════════════════════════════════════════════════════════════════════
 //  TAB SWITCH
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+//  LEADERS — season-wide individual leaders (batters, pitchers by ERA, catchers)
+//  Every team in the DB for the current sport + season; My Team's players are
+//  highlighted in gold.
+// ════════════════════════════════════════════════════════════════════════════
+let _leadersCache = null;   // { key, bat, pit, cat }
+const _leadersUI = {
+  bat: { sort: 'avg',    min: 20 },
+  pit: { sort: 'era',    min: 15 },
+  cat: { sort: 'perInn', min: 40 },
+};
+
+function refreshLeadersIfOpen() {
+  const p = document.getElementById('tab-leaders');
+  if (p && p.classList.contains('active')) loadLeaders();
+}
+
+async function loadLeaders() {
+  const el = document.getElementById('tab-leaders');
+  if (!el) return;
+  const key = currentSport + '|' + currentSeason;
+  if (_leadersCache && _leadersCache.key === key) { renderLeaders(); return; }
+  el.innerHTML = '<div class="empty-state"><div class="spinner"></div> Loading leaders…</div>';
+  const season = currentSeason.replace(/'/g, "''");
+  const sport  = currentSport.replace(/'/g, "''");
+  const base = (alias, tbl) => `FROM ${tbl} ${alias}
+         JOIN games g ON g.id = ${alias}.game_id
+         JOIN teams t ON t.id = ${alias}.team_id
+         WHERE LOWER(t.sport) = LOWER('${sport}') AND g.season = '${season}'`;
+  try {
+    const [bat, pit, cat] = await Promise.all([
+      sql(`SELECT gbs.team_id, t.name AS team, gbs.player_name,
+                  SUM(gbs.ab) AS ab, SUM(gbs.h) AS h, SUM(gbs.doubles) AS d2, SUM(gbs.triples) AS d3,
+                  SUM(gbs.hr) AS hr, SUM(gbs.rbi) AS rbi, SUM(gbs.bb) AS bb,
+                  SUM(COALESCE(gbs.hbp,0)) AS hbp, SUM(COALESCE(gbs.sb,0)) AS sb
+           ${base('gbs','game_batting_stats')}
+           GROUP BY gbs.team_id, t.name, gbs.player_name
+           HAVING SUM(gbs.ab) >= 5`),
+      sql(`SELECT gps.team_id, t.name AS team, gps.player_name,
+                  SUM(FLOOR(gps.ip::numeric)*3 + ROUND((gps.ip::numeric - FLOOR(gps.ip::numeric))*10)) AS outs,
+                  SUM(gps.er) AS er, SUM(gps.h) AS h, SUM(gps.bb) AS bb, SUM(gps.so) AS k
+           ${base('gps','game_pitching_stats')}
+           GROUP BY gps.team_id, t.name, gps.player_name
+           HAVING SUM(FLOOR(gps.ip::numeric)*3 + ROUND((gps.ip::numeric - FLOOR(gps.ip::numeric))*10)) >= 9`),
+      sql(`SELECT gcs.team_id, t.name AS team, gcs.player_name,
+                  SUM(gcs.inn) AS inn, SUM(gcs.sb) AS sb, SUM(gcs.pb) AS pb,
+                  SUM(gcs.cs) AS cs, SUM(gcs.sb_att) AS att
+           ${base('gcs','game_catching_stats')}
+           GROUP BY gcs.team_id, t.name, gcs.player_name
+           HAVING SUM(gcs.inn) >= 10`),
+    ]);
+    _leadersCache = { key, bat: bat || [], pit: pit || [], cat: cat || [] };
+    renderLeaders();
+  } catch (e) {
+    console.error('leaders', e);
+    el.innerHTML = `<div class="empty-state">Couldn't load leaders: ${escHtml(String(e.message || e))}</div>`;
+  }
+}
+
+function leadersSet(sec, field, val) {
+  _leadersUI[sec][field] = field === 'min' ? Number(val) : val;
+  renderLeaders();
+}
+
+function _leadersControls(sec, sorts, mins, unit) {
+  const ui = _leadersUI[sec];
+  const pill = (active) => `padding:4px 12px;border-radius:14px;border:1px solid ${active ? '#e8b55a' : '#30363d'};` +
+    `background:${active ? 'rgba(232,181,90,0.15)' : '#161b22'};color:${active ? '#e8b55a' : '#8b949e'};` +
+    `font-size:0.75rem;font-weight:700;cursor:pointer`;
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0 10px">
+    ${sorts.map(([k, label]) => `<button style="${pill(ui.sort === k)}" onclick="leadersSet('${sec}','sort','${k}')">${label}</button>`).join('')}
+    <span style="flex:1"></span>
+    <label style="color:#8b949e;font-size:0.75rem">Min ${unit}
+      <select onchange="leadersSet('${sec}','min',this.value)" style="background:#161b22;border:1px solid #30363d;color:#e6edf3;border-radius:6px;padding:3px 6px;margin-left:4px">
+        ${mins.map(m => `<option value="${m}"${m === ui.min ? ' selected' : ''}>${m}</option>`).join('')}
+      </select></label>
+  </div>`;
+}
+
+// rows: already sorted best-first. cols: [[header, fn(row)]...]
+function _leadersTable(rows, cols, topN = 15) {
+  const mine = r => myTeamId && String(r.team_id) === String(myTeamId);
+  let shown = rows.slice(0, topN).map((r, i) => ({ r, rank: i + 1 }));
+  if (!shown.some(x => mine(x.r))) {
+    const idx = rows.findIndex(mine);
+    if (idx >= topN) shown.push({ r: rows[idx], rank: idx + 1, extra: true });
+  }
+  if (!shown.length) return '<div style="color:#8b949e;font-size:0.82rem;padding:10px 0">No qualifying players</div>';
+  const body = shown.map(({ r, rank, extra }) => {
+    const m = mine(r);
+    const tr = m ? 'background:rgba(232,181,90,0.14)' : '';
+    const sep = extra ? 'border-top:2px dashed #30363d;' : '';
+    return `<tr style="${tr}">
+      <td style="${sep}${m ? 'border-left:3px solid #e8b55a;' : ''}text-align:left;color:#8b949e">${rank}</td>
+      <td style="${sep}text-align:left;${m ? 'color:#e8b55a;font-weight:800' : 'font-weight:600'}">${m ? '⭐ ' : ''}${escHtml(r.player_name)}</td>
+      <td style="${sep}text-align:left;color:${m ? '#e8b55a' : '#8b949e'};font-size:0.75rem">${escHtml(r.team || '')}</td>
+      ${cols.map(([, fn]) => `<td style="${sep}">${fn(r)}</td>`).join('')}
+    </tr>`;
+  }).join('');
+  return `<div class="tbl-wrap"><table class="dt">
+    <thead><tr><th>#</th><th>Player</th><th>Team</th>${cols.map(([h]) => `<th style="cursor:default">${h}</th>`).join('')}</tr></thead>
+    <tbody>${body}</tbody></table></div>`;
+}
+
+function renderLeaders() {
+  const el = document.getElementById('tab-leaders');
+  if (!el || !_leadersCache) return;
+  const n = v => Number(v) || 0;
+  const f3 = v => v.toFixed(3).replace(/^0(?=\.)/, '');
+  const no = '<span style="color:#8b949e">—</span>';
+
+  // ── Batters ──
+  const bu = _leadersUI.bat;
+  const bats = _leadersCache.bat.filter(r => r.player_name && r.player_name !== 'TEAM' && n(r.ab) >= bu.min).map(r => {
+    const ab = n(r.ab), h = n(r.h), bb = n(r.bb), hbp = n(r.hbp);
+    const tb = h + n(r.d2) + 2 * n(r.d3) + 3 * n(r.hr);
+    const obp = (ab + bb + hbp) ? (h + bb + hbp) / (ab + bb + hbp) : 0;
+    const slg = ab ? tb / ab : 0;
+    return { ...r, ab, h, avg: ab ? h / ab : 0, obp, slg, ops: obp + slg, hrN: n(r.hr), rbiN: n(r.rbi), sbN: n(r.sb) };
+  });
+  const bkey = { avg: 'avg', obp: 'obp', slg: 'slg', ops: 'ops', hr: 'hrN', rbi: 'rbiN', sb: 'sbN', h: 'h' }[bu.sort] || 'avg';
+  bats.sort((a, b) => b[bkey] - a[bkey] || b.ab - a.ab);
+  const batHtml = _leadersTable(bats, [
+    ['AB', r => r.ab], ['H', r => r.h], ['AVG', r => f3(r.avg)], ['OBP', r => f3(r.obp)],
+    ['SLG', r => f3(r.slg)], ['OPS', r => f3(r.ops)], ['HR', r => r.hrN], ['RBI', r => r.rbiN], ['SB', r => r.sbN],
+  ]);
+
+  // ── Pitchers ──
+  const pu = _leadersUI.pit;
+  const pits = _leadersCache.pit.filter(r => r.player_name && n(r.outs) >= pu.min * 3).map(r => {
+    const outs = n(r.outs), ip = outs / 3;
+    return { ...r, outs, ip, era: ip ? n(r.er) * 7 / ip : 99, whip: ip ? (n(r.bb) + n(r.h)) / ip : 99, kN: n(r.k) };
+  });
+  const pkey = { era: 'era', whip: 'whip', k: 'kN' }[pu.sort] || 'era';
+  pits.sort((a, b) => pu.sort === 'k' ? b.kN - a.kN : a[pkey] - b[pkey] || b.outs - a.outs);
+  const fIP = o => `${Math.floor(o / 3)}.${o % 3}`;
+  const pitHtml = _leadersTable(pits, [
+    ['IP', r => fIP(r.outs)], ['ERA', r => r.era.toFixed(2)], ['WHIP', r => r.whip.toFixed(2)],
+    ['K', r => r.kN], ['BB', r => n(r.bb)], ['H', r => n(r.h)], ['ER', r => n(r.er)],
+  ]);
+
+  // ── Catchers ──
+  const cu = _leadersUI.cat;
+  const cats = _leadersCache.cat.filter(r => r.player_name && n(r.inn) >= cu.min).map(r => {
+    const inn = n(r.inn), sb = n(r.sb), pb = n(r.pb), cs = n(r.cs), att = n(r.att);
+    return { ...r, inn, sb, pb, cs, att, perInn: inn ? (sb + pb) / inn : 99, csPct: att ? cs / att * 100 : null };
+  });
+  if (cu.sort === 'csPct') {
+    // CS% needs a real sample — fewer than 5 attempts sinks to the bottom
+    cats.sort((a, b) => ((b.att >= 5 ? b.csPct : -1) - (a.att >= 5 ? a.csPct : -1)) || b.inn - a.inn);
+  } else if (cu.sort === 'inn') {
+    cats.sort((a, b) => b.inn - a.inn);
+  } else {
+    cats.sort((a, b) => a.perInn - b.perInn || b.inn - a.inn);
+  }
+  const catHtml = _leadersTable(cats, [
+    ['Inn', r => r.inn.toFixed(0)], ['SB', r => r.sb], ['CS', r => r.cs],
+    ['CS%', r => r.csPct == null ? no : r.csPct.toFixed(0) + '%'], ['PB', r => r.pb],
+    ['SB+PB/Inn', r => r.perInn.toFixed(2)],
+  ]);
+
+  const hint = myTeamId ? '' :
+    '<div style="color:#8b949e;font-size:0.75rem;margin-bottom:8px">Set ⭐ My Team (top bar) to highlight your players here.</div>';
+
+  el.innerHTML = `
+    <div style="color:#e8b55a;font-size:1.15rem;font-weight:800">🏆 ${escHtml(currentSeason)} Leaders</div>
+    <div style="color:#8b949e;font-size:0.78rem;margin:2px 0 12px">All teams in the database · ⭐ gold rows are My Team players</div>
+    ${hint}
+    <div class="sec-title" style="margin-top:6px">🏏 Batters</div>
+    ${_leadersControls('bat', [['avg','AVG'],['obp','OBP'],['slg','SLG'],['ops','OPS'],['h','H'],['hr','HR'],['rbi','RBI'],['sb','SB']], [10,20,30,50], 'AB')}
+    ${batHtml}
+    <div class="sec-title" style="margin-top:26px">💪 Pitchers</div>
+    ${_leadersControls('pit', [['era','ERA'],['whip','WHIP'],['k','K']], [10,15,20,30], 'IP')}
+    ${pitHtml}
+    <div class="sec-title" style="margin-top:26px">🧤 Catchers</div>
+    ${_leadersControls('cat', [['perInn','SB+PB / Inn'],['csPct','CS%'],['inn','Innings']], [20,30,40,50], 'Inn')}
+    ${catHtml}`;
+}
+
 function switchTab(btn, name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'leaders') loadLeaders();
 }
 
 // Floating 🏠 button — jump back to the Home rankings tab from anywhere, any scroll position

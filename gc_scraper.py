@@ -1598,177 +1598,196 @@ def _parse_pos_abbr(s: str) -> Optional[str]:
     return None
 
 
+# Fielding-text based inference (replaces sub-line based version).
+# GameChanger's web Plays page has no substitution lines, so we infer who is at
+# each position every defensive half-inning from the fielding text itself
+# ("to catcher X", "error by third baseman Y", "Z pitching").
+
+_FIELD_POS_RE = re.compile(
+    r"\b(pitcher|catcher|first\s+baseman|second\s+baseman|third\s+baseman|shortstop|"
+    r"short\s+fielder|left\s+fielder|center\s+fielder|right\s+fielder)\s+"
+    r"([A-Z][\w.'\-]*(?:\s+[A-Z][\w.'\-]*){0,2})"
+)
+_PITCHING_NAME_RE = re.compile(
+    r"(?:^|,\s)([A-Z][\w.'\-]*(?:\s+[A-Z][\w.'\-]*){0,3})\s+pitching\b"
+)
+_RUN_EVENT_RE = re.compile(
+    r"\bsteals\b|caught stealing|picked off|passed ball|wild pitch", re.I
+)
+
+
+def _match_roster(raw: str, roster_names: list) -> Optional[str]:
+    r = raw.strip().rstrip('.,').lower()
+    if not r:
+        return None
+    for n in roster_names:
+        if n.lower() == r:
+            return n
+    parts = r.split()
+    if len(parts) >= 2:
+        for n in roster_names:
+            np_ = n.lower().split()
+            if len(np_) >= 2 and np_[0][0] == parts[0][0] and np_[-1] == parts[-1]:
+                return n
+        for n in roster_names:
+            nl = n.lower()
+            if nl.startswith(r) or r.startswith(nl):
+                return n
+    else:
+        cands = [n for n in roster_names if n.lower().split()[0] == parts[0]]
+        if len(cands) == 1:
+            return cands[0]
+    return None
+
+
 def infer_fielding_from_lineup_and_plays(
-    scouted_players: list[dict],
-    play_lines: list[str],
+    scouted_players: list,
+    play_lines: list,
     scouted_home: bool,
-) -> tuple[list[dict], list[dict]]:
+) -> tuple:
     """
-    Infer per-player catching stats and innings-played from:
-      - Box score lineup (player positions in order played)
-      - Raw play-by-play lines (substitution events + catching events)
+    Per-inning catcher / position inference. Returns (catching_stats, innings_played).
 
-    Each player's positions list (e.g. ['C','SS']) records the order they played
-    those positions. Play-by-play sub events tell us WHEN the switch happened.
-
-    Returns (catching_stats, innings_played_stats).
+    - Starting positions come from the box score (first listed position).
+    - Each defensive half-inning, positions named in the play text override the
+      carried-forward assignment. A box-score catcher seen at another position
+      is ruled out; if the catcher spot is then empty, the remaining box-score
+      catcher who was not seen elsewhere takes it.
+    - Half-innings with no completed plays (e.g. an unplayed 5th) are skipped.
+    - SB / CS / PB are counted by occurrence (a line can hold several events) and
+      credited to that inning's catcher.
     """
-    our_half = 'bottom' if scouted_home else 'top'
-    def_half = 'top'   if scouted_home else 'bottom'   # when WE are in the field
+    from collections import Counter
 
-    # ---- Build initial position assignments from box score ----
-    # player_name -> starting position
-    player_to_pos: dict[str, str] = {}
-    # position abbr -> player currently at that position
-    pos_to_player: dict[str, str] = {}
-    # player -> jersey number
-    player_num: dict[str, str] = {}
+    def_half = 'top' if scouted_home else 'bottom'
 
+    roster: dict = {}
     for p in scouted_players:
         name = p.get('name', '')
         if not name or name == 'TEAM':
             continue
         positions = [x.strip().upper() for x in p.get('positions', []) if x.strip()]
-        if not positions:
-            continue
-        player_num[name] = p.get('num', '')
-        starting = positions[0]
-        player_to_pos[name] = starting
-        pos_to_player[starting] = name
-
-    if not player_to_pos:
-        print(f"[infer] ✗ No players with positions found in box score — cannot infer innings")
+        roster[name] = {'num': p.get('num', ''), 'positions': positions}
+    if not roster:
+        print("[infer] ✗ No players in box score — cannot infer innings")
         return [], []
+    roster_names = list(roster)
 
-    print(f"[infer] Starting positions: { {n: p for n, p in player_to_pos.items()} }")
+    cur_pos = {n: r['positions'][0] for n, r in roster.items() if r['positions']}
+    catch_capable = [n for n, r in roster.items() if 'C' in r['positions']]
+    print(f"[infer] Starting positions: {cur_pos}")
 
-    # ---- Accumulators ----
-    # innings played: player -> {inn_p, inn_c, ...}
-    inning_acc: dict[str, dict] = {
-        name: {
-            'player_name': name, 'player_num': player_num.get(name, ''),
+    inning_acc = {
+        n: {
+            'player_name': n, 'player_num': roster[n]['num'],
             'inn_p': 0.0, 'inn_c': 0.0, 'inn_1b': 0.0, 'inn_2b': 0.0,
             'inn_3b': 0.0, 'inn_ss': 0.0, 'inn_lf': 0.0,
             'inn_cf': 0.0, 'inn_rf': 0.0, 'inn_sf': 0.0, 'inn_total': 0.0,
-        }
-        for name in player_to_pos
+        } for n in roster
     }
-    # catching stats: only for players who play C
-    catching_acc: dict[str, dict] = {}
-    for p in scouted_players:
-        name = p.get('name', '')
-        if not name or name == 'TEAM':
-            continue
-        positions = [x.strip().upper() for x in p.get('positions', []) if x.strip()]
-        if 'C' in positions:
-            catching_acc[name] = {
-                'player_name': name, 'player_num': player_num.get(name, ''),
-                'inn': 0.0, 'pb': 0, 'sb': 0, 'sb_att': 0,
-                'cs': 0, 'cs_pct': None, 'pik': 0, 'ci': 0,
-            }
+    catching_acc = {
+        n: {
+            'player_name': n, 'player_num': roster[n]['num'],
+            'inn': 0.0, 'pb': 0, 'sb': 0, 'sb_att': 0,
+            'cs': 0, 'cs_pct': None, 'pik': 0, 'ci': 0,
+        } for n in catch_capable
+    }
 
+    # ---- Group lines into (inning, half) blocks ----
     inning_re = re.compile(r'(top|bottom)\s+(?:of\s+)?(\d+)(?:st|nd|rd|th)?', re.I)
-
-    current_inning: Optional[int] = None
-    current_half:   Optional[str] = None
-    # Snapshot of positions at the start of each defensive half-inning
-    # player -> set of positions played THIS defensive half-inning
-    this_half_at_pos: dict[str, set] = {}
-
-    def _close_half_inning():
-        """Credit each player for the defensive half-inning just completed."""
-        for pname, pos_set in this_half_at_pos.items():
-            if pname not in inning_acc:
-                continue
-            for pos in pos_set:
-                fld = _POS_TO_INN_FIELD.get(pos)
-                if fld:
-                    inning_acc[pname][fld] += 1.0
-                    inning_acc[pname]['inn_total'] += 1.0
-
-    def _open_half_inning():
-        """Snapshot current defensive positions at the start of a new defensive half."""
-        this_half_at_pos.clear()
-        for pname, pos in player_to_pos.items():
-            this_half_at_pos.setdefault(pname, set()).add(pos)
-
+    blocks: dict = {}
+    cur_key = None
     for line in play_lines:
-        # ---- Inning header ----
-        inning_m = inning_re.match(line)
-        if inning_m:
-            new_half   = inning_m.group(1).lower()
-            new_inning = int(inning_m.group(2))
+        m = inning_re.match(line)
+        if m:
+            cur_key = (int(m.group(2)), m.group(1).lower())
+            blocks.setdefault(cur_key, [])
+            continue
+        if cur_key is not None:
+            blocks[cur_key].append(line)
 
-            # Close out the previous half if it was a defensive half
-            if current_half == def_half and current_inning is not None:
-                _close_half_inning()
-
-            current_inning = new_inning
-            current_half   = new_half
-
-            if current_half == def_half:
-                _open_half_inning()
+    for key in sorted(k for k in blocks if k[1] == def_half):
+        lines = blocks[key]
+        # Skip half-innings where nothing was played (e.g. only "X at bat")
+        if not any(classify_outcome(l) or _RUN_EVENT_RE.search(l) for l in lines):
+            print(f"[infer] {key[1]} {key[0]}: no plays — skipped")
             continue
 
-        # ---- Substitution / position change ----
-        sub_m = _SUB_RE.search(line)
-        if sub_m:
-            entering_raw = sub_m.group(1).strip()
-            new_pos = _parse_pos_abbr(sub_m.group(2))
-            if new_pos:
-                # Match entering player by name prefix (handles abbreviated names)
-                matched = None
-                for pname in player_to_pos:
-                    if pname.lower().startswith(entering_raw.lower()[:6]):
-                        matched = pname
-                        break
-                if matched:
-                    old_pos = player_to_pos.get(matched)
-                    print(f"[infer] Sub: {matched} {old_pos} → {new_pos}  (line: '{line[:60]}')")
-                    player_to_pos[matched] = new_pos
-                    pos_to_player[new_pos] = matched
-                    if old_pos and old_pos != new_pos:
-                        if pos_to_player.get(old_pos) == matched:
-                            del pos_to_player[old_pos]
-                    # Track new position in current defensive half-inning
-                    if current_half == def_half:
-                        this_half_at_pos.setdefault(matched, set()).add(new_pos)
-            continue
+        # ---- Observe positions from fielding text ----
+        obs: dict = {}
+        def _see(name_raw, pos):
+            n = _match_roster(name_raw, roster_names)
+            if n and pos:
+                obs.setdefault(n, Counter())[pos] += 1
 
-        # ---- Catching events (when we are in the field) ----
-        if current_half == def_half and current_inning is not None:
-            current_catcher = pos_to_player.get('C')
-            if current_catcher and current_catcher in catching_acc:
-                tl = line.lower()
-                if 'stolen base' in tl or 'steals' in tl:
-                    catching_acc[current_catcher]['sb']     += 1
-                    catching_acc[current_catcher]['sb_att'] += 1
-                elif 'caught stealing' in tl or 'picked off' in tl:
-                    catching_acc[current_catcher]['cs']     += 1
-                    catching_acc[current_catcher]['sb_att'] += 1
-                elif 'passed ball' in tl:
-                    catching_acc[current_catcher]['pb'] += 1
+        for l in lines:
+            for m in _FIELD_POS_RE.finditer(l):
+                _see(m.group(2), _parse_pos_abbr(m.group(1)))
+            for m in _PITCHING_NAME_RE.finditer(l):
+                _see(m.group(1), 'P')
+            sm = _SUB_RE.search(l)          # legacy: sub lines if GC ever shows them
+            if sm:
+                _see(sm.group(1), _parse_pos_abbr(sm.group(2)))
 
-    # Close the final half-inning
-    if current_half == def_half and current_inning is not None:
-        _close_half_inning()
+        # ---- Apply observations to carried positions ----
+        for n, cnt in obs.items():
+            newpos = cnt.most_common(1)[0][0]
+            for other, op in list(cur_pos.items()):
+                if other != n and op == newpos and other not in obs:
+                    cur_pos.pop(other)          # displaced
+            cur_pos[n] = newpos
 
-    # ---- Finalize catching stats ----
+        # ---- Decide this inning's catcher ----
+        obs_c = [(cnt['C'], n) for n, cnt in obs.items() if cnt.get('C')]
+        if obs_c:
+            catcher = max(obs_c)[1]
+            how = 'seen'
+        else:
+            catcher = next((n for n, p in cur_pos.items() if p == 'C'), None)
+            how = 'carried'
+            if catcher is None:
+                cands = [n for n in catch_capable if n not in obs]
+                if cands:
+                    catcher = cands[0]
+                    how = 'box-score ruling'
+            if catcher is not None:
+                for other, op in list(cur_pos.items()):
+                    if other != catcher and op == 'C':
+                        cur_pos.pop(other)
+                cur_pos[catcher] = 'C'
+        print(f"[infer] {key[1]} {key[0]}: catcher = {catcher} ({how})")
+
+        # ---- Credit innings ----
+        for n, pos in cur_pos.items():
+            fld = _POS_TO_INN_FIELD.get(pos)
+            if fld and n in inning_acc:
+                inning_acc[n][fld] += 1.0
+                inning_acc[n]['inn_total'] += 1.0
+
+        # ---- Credit catching events (count every occurrence) ----
+        if catcher in catching_acc:
+            ca = catching_acc[catcher]
+            for l in lines:
+                tl = l.lower()
+                sb = len(re.findall(r'\bsteals\b|\bstolen base\b', tl))
+                cs = len(re.findall(r'caught stealing|picked off', tl))
+                pb = len(re.findall(r'passed ball', tl))
+                ca['sb'] += sb
+                ca['cs'] += cs
+                ca['sb_att'] += sb + cs
+                ca['pb'] += pb
+
     for name, stats in catching_acc.items():
         stats['inn'] = inning_acc.get(name, {}).get('inn_c', 0.0)
-        total_att = stats['sb_att']
-        stats['cs_pct'] = (
-            round(stats['cs'] / total_att * 100, 2) if total_att > 0 else None
-        )
+        att = stats['sb_att']
+        stats['cs_pct'] = round(stats['cs'] / att * 100, 2) if att > 0 else None
 
     catching_list = [
         v for v in catching_acc.values()
         if v['inn'] > 0 or v['sb'] > 0 or v['pb'] > 0 or v['cs'] > 0
     ]
     innings_list = [v for v in inning_acc.values() if v['inn_total'] > 0]
-
-    print(f"[infer] Fielding: {len(innings_list)} players, "
-          f"{len(catching_list)} catchers with stats")
+    print(f"[infer] Fielding: {len(innings_list)} players, {len(catching_list)} catchers with stats")
     return catching_list, innings_list
 
 
