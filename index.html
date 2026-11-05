@@ -4640,7 +4640,10 @@ async function loadSeedingStandings(force) {
     // Default window: the latest game day and the 2 days before it (a weekend tournament)
     const last = new Date(dates[dates.length - 1] + 'T12:00:00');
     const cutoff = new Date(last); cutoff.setDate(cutoff.getDate() - 2);
-    const cutStr = cutoff.toISOString().slice(0, 10);
+    let cutStr = cutoff.toISOString().slice(0, 10);
+    // Tournament start date (format.start): games before it never count toward standings
+    const startStr = fmtNorm(window._tourneyFormat).start;
+    if (startStr) cutStr = startStr;
     const prevOn = window._seedState && window._seedState.on;
     window._seedState = { rows, dates, on: new Set(dates.filter(d => d >= cutStr)), win: new Set(dates.filter(d => d >= cutStr)) };
     if (prevOn && force) { const keep = [...prevOn].filter(d => dates.includes(d)); if (keep.length) window._seedState.on = new Set(keep); }
@@ -4661,7 +4664,8 @@ function fmtNorm(f) {
     prelims: Math.max(0, parseInt(f.prelims) || 0),
     structure: f.structure === 'gold_silver' ? 'gold_silver' : 'all',
     goldSize: Math.max(0, parseInt(f.goldSize) || 0),
-    elim: f.elim === 'double' ? 'double' : 'single'
+    elim: f.elim === 'double' ? 'double' : 'single',
+    start: /^\d{4}-\d{2}-\d{2}$/.test(String(f.start || '')) ? String(f.start) : ''
   };
 }
 function fmtFieldsHTML(p, f) {
@@ -4681,7 +4685,7 @@ function fmtFieldsHTML(p, f) {
 }
 function readFmt(p) {
   const g = id => { const el = document.getElementById(p + id); return el ? el.value : ''; };
-  const f = fmtNorm({ prelims: g('Prelims'), structure: g('Struct'), goldSize: g('Gold'), elim: g('Elim') });
+  const f = fmtNorm({ prelims: g('Prelims'), structure: g('Struct'), goldSize: g('Gold'), elim: g('Elim'), start: (window._tourneyFormat && window._tourneyFormat.start) || '' });
   return f.prelims > 0 ? f : null;
 }
 async function saveTourneyFormat() {
