@@ -2,8 +2,11 @@
 """
 gc_scrape_poller.py
 Polls Supabase for pending scrape_jobs and runs gc_scraper.py for each.
-Cron entry:
-  */5 * * * * /Users/bryanhaviland/backpic-scouting-v2/gc_scrape_poller.py >> /Users/bryanhaviland/backpic-scouting-v2/poller.log 2>&1
+Cron entry (handles normal team jobs only):
+  */5 * * * * /usr/bin/python3 /Users/bryanhaviland/backpic-scouting-v2/gc_scrape_poller.py >> /Users/bryanhaviland/backpic-scouting-v2/poller.log 2>&1
+SCORES| jobs need the logged-in desktop (Chrome + AppleScript), so only the Sunday launchd
+poller (com.backpic.sunday-poller, BACKPIC_GUI=1, Sun 9:30 AM-8 PM) runs them. Under cron they are
+left pending and flagged via result_summary so the app can show why.
 """
 
 import os, sys, subprocess, datetime, pathlib, urllib.request, urllib.error, json
@@ -61,6 +64,13 @@ def main():
         log("ERROR: SUPABASE_URL or SUPABASE_KEY missing from .env"); sys.exit(1)
 
     jobs = get_pending_jobs(supabase_url, supabase_key)
+    if os.environ.get("BACKPIC_GUI") != "1":
+        WAIT_NOTE = "Waiting for Sunday GUI poller (Sun 9:30 AM-8 PM; Mac awake, signed in, Chrome open)"
+        for j in jobs:
+            if j["team_name"].startswith("SCORES|") and not j.get("result_summary"):
+                log(f"Job {j['id']} is a SCORES job; cron can't run it. Flagged as waiting for the Sunday GUI poller")
+                update_job(supabase_url, supabase_key, j["id"], {"result_summary": WAIT_NOTE})
+        jobs = [j for j in jobs if not j["team_name"].startswith("SCORES|")]
     if not jobs: sys.exit(0)
 
     log(f"Found {len(jobs)} pending job(s)")

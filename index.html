@@ -4949,7 +4949,7 @@ async function refreshTourneyScores() {
     }
     if (j && j.status === 'failed') { done('⚠ Scrape failed: ' + (j.error || '').slice(0, 160)); return; }
     const secs = Math.round((Date.now() - t0) / 1000);
-    setMsg((j && j.status === 'running' ? '⏳ Scraping on the Mac… ' : '⏳ Waiting for the Mac to pick it up… ') + secs + 's');
+    setMsg((j && j.status === 'running' ? '⏳ Scraping on the Mac… ' : '⏳ Waiting for the Mac to pick it up… ') + secs + 's' + (j && j.status === 'pending' && j.result_summary ? ' — ' + j.result_summary : ''));
     setTimeout(poll, 8000);
   };
   setTimeout(poll, 5000);
